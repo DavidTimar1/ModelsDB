@@ -1,0 +1,79 @@
+# Build and publish a GitHub Release when a version tag (v*) is pushed.
+#
+# The FIRST step is a release GATE: it refuses to release unless the pushed tag
+# matches the VERSION file, so the tag, the binary's stamped version (build.sh
+# injects VERSION via -ldflags), and VERSION itself can never drift apart.
+#
+# See README "Cutting a release" for how a maintainer triggers this.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # required to create the Release and upload its assets
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Verify tag matches VERSION (release gate)
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          file="$(tr -d '[:space:]' < VERSION)"
+          if [ "$tag" != "$file" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match VERSION ($file). Bump VERSION + CHANGELOG, then tag v$file."
+            exit 1
+          fi
+          if ! grep -q "\[$file\]" CHANGELOG.md; then
+            echo "::warning::No CHANGELOG.md entry found for $file."
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build binaries
+        run: bash build.sh
+
+      - name: Checksums for the release assets
+        run: |
+          # Stable, version-less asset names (modelsdb.exe / modelsdb) so users
+          # can download and overwrite their existing binary in place.
+          ( cd dist && sha256sum modelsdb.exe modelsdb > SHA256SUMS && cat SHA256SUMS )
+
+      - name: Sign SHA256SUMS (self-update trust anchor)
+        # The in-app self-update verifies this ed25519 signature (with the public
+        # key embedded in internal/selfupdate/pubkey.go) before trusting a
+        # downloaded binary. MODELSDB_SIGN_KEY is the base64 private key repo
+        # secret. It never prints the key; it only writes dist/SHA256SUMS.sig.
+        env:
+          MODELSDB_SIGN_KEY: ${{ secrets.MODELSDB_SIGN_KEY }}
+        run: go run ./cmd/sign sums dist/SHA256SUMS
+
+      - name: Extract release notes from CHANGELOG
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          awk -v ver="$v" '
+            $0 ~ ("^## \\[" ver "\\]") { grab=1; next }
+            grab && /^## \[/ { exit }
+            grab { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then echo "Release v$v" > RELEASE_NOTES.md; fi
+          echo "--- release notes ---"; cat RELEASE_NOTES.md
+
+      - name: Publish release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          body_path: RELEASE_NOTES.md
+          files: |
+            dist/modelsdb.exe
+            dist/modelsdb
+            dist/SHA256SUMS
+            dist/SHA256SUMS.sig

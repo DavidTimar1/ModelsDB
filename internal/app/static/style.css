@@ -1,0 +1,1553 @@
+/* Theme tokens. Light is the default; the dark block overrides them when the
+   <html> element carries data-theme="dark" (set pre-paint by the inline script
+   in index.html). Only "chrome" colors are themed - semantic colors (price
+   green/amber/red, the rating scale, the gold favorite star, the HF brand) are
+   meaningful and stay fixed, so they are NOT listed here. */
+  :root {
+    color-scheme: light;
+    /* Typography: one UI family everywhere, one mono family for JSON only, and a
+       three-role type scale (title / control / body). Each font-size below is one of
+       these three tokens; nothing hard-codes a rem/px text size.
+
+       Every role is a plain multiple of the root font size, so one number drives the
+       whole UI. No role may depend on vw or carry a clamp: the root size is set to
+       fit the table (see the html rule below), and a vw term would size text against
+       the window instead of against that. */
+    --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
+    --fs-title: 1.7rem;
+    --fs-control: 0.95rem;
+    --fs-body: 1rem;
+    --bg: #eef2f7;            /* page + topbar background */
+    --surface: #ecf0f5;       /* tables, modals, cards, toasts, inputs */
+    --card-bg: #ffffff;       /* raised mobile card background */
+    --surface-alt: #f8fafc;   /* code blocks, subtle insets */
+    --surface-inset: #f1f5f9; /* paths pre block, hover fills */
+    --filters-bg: #e2e8f0;    /* the filter bar panel */
+    --text: #1e293b;          /* primary text + headings */
+    --text-muted: #3d4b5e;    /* secondary text */
+    --text-faint: #94a3b8;    /* placeholders, version label */
+    --border: #c0cad6;        /* default borders */
+    --border-soft: #dbe2ea;   /* lighter dividers */
+    --border-faint: #eef2f7;  /* faintest table dividers */
+    --input-bg: #ecf0f5;      /* form-control background */
+    --tip-bg: #334155;        /* tooltip / hover-tip background */
+    --tip-text: #fff;
+    --accent: #3b82f6;        /* primary action (Update, focus) */
+    --accent-hover: #2563eb;
+    --banner-bg: #eef2ff;     /* update-available banner */
+    --banner-text: #3730a3;
+    --banner-border: #c7d2fe;
+    --banner-link: #4338ca;
+    --zdr-bg: #fdecea;        /* "no zero-retention" cell */
+    --zdr-text: #b91c1c;
+    --shadow: rgba(0,0,0,0.08);
+    --shadow-strong: rgba(0,0,0,0.25);
+    /* OpenRouter brand glyph fill. This is a semantic BRAND colour, not chrome, so it
+       carries a fixed value per theme (the two official brand variants): purple on
+       light, lime on dark. */
+    --or-fill: #7624F4;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0f172a;
+    --surface: #1e293b;
+    --card-bg: #1e293b;
+    --surface-alt: #18243a;
+    --surface-inset: #0f172a;
+    --filters-bg: #1e293b;
+    --text: #e2e8f0;
+    --text-muted: #94a3b8;
+    --text-faint: #64748b;
+    --border: #334155;
+    --border-soft: #2b3a52;
+    --border-faint: #243049;
+    --input-bg: #0f172a;
+    --tip-bg: #475569;
+    --tip-text: #f8fafc;
+    --accent: #3b82f6;
+    --accent-hover: #60a5fa;
+    --banner-bg: #1e1b4b;
+    --banner-text: #c7d2fe;
+    --banner-border: #3730a3;
+    --banner-link: #a5b4fc;
+    --zdr-bg: #3a1d22;
+    --zdr-text: #fca5a5;
+    --shadow: rgba(0,0,0,0.4);
+    --shadow-strong: rgba(0,0,0,0.6);
+    /* OpenRouter brand glyph: the lime variant on a dark background. */
+    --or-fill: #C8FF00;
+  }
+
+  * { box-sizing: border-box; }
+  /* The root size is the one knob that sets how wide the table is: --fs-body is
+     exactly 1rem, and every dimension inside the table is rem, so the table's width
+     is proportional to this. A percentage rather than px, so a reader who has raised
+     their browser's base size keeps that preference and the whole scale moves with
+     them. 87.5% is 14px on a default 16px base. */
+  html { font-size: 87.5%; }
+  body { font-family: var(--font-ui); padding: 0 2rem 2rem; background: var(--bg); margin: 0; color: var(--text); }
+  h1 { margin: 0; font-size: var(--fs-title); color: var(--text); }
+
+  /* Sticky top bar: title on the left, status icon on the right */
+  #topbar {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background: var(--bg);
+    padding: 14px 0;
+    margin: 0 0 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  /* Update button: small, clean, sits at the right of the sticky topbar next
+     to the status icon. margin-left:auto pushes it (and the icon) to the right
+     while the title stays left. */
+  .btn-update {
+    margin-left: auto;
+    flex: 0 0 auto;
+    padding: 6px 14px;
+    font-size: var(--fs-control);
+    font-weight: 600;
+    color: #fff;
+    background: var(--accent);
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.2s ease;
+  }
+  .btn-update:hover:not(:disabled) { background: var(--accent-hover); }
+  .btn-update:disabled {
+    background: #94a3b8;
+    cursor: progress;
+  }
+
+  /* "Filters" button that opens the off-canvas filter drawer. It exists only for
+     card view; the card-view block at the bottom of this file reveals it. In
+     table view it is display:none, so the topbar is unchanged. */
+  .btn-filters-toggle {
+    display: none;
+    flex: 0 0 auto;
+    padding: 6px 14px;
+    font-size: var(--fs-control);
+    font-weight: 600;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  /* Dimmer behind the open filter drawer; only shown (in card view) while
+     the drawer is open. */
+  #filters-backdrop { display: none; }
+
+  /* Card-view-only sort + direction bar; revealed by the card-view block below. */
+  #mobile-sortbar { display: none; }
+
+  /* Small round "info" button (paths dialog) sitting next to Update. */
+  .btn-info {
+    flex: 0 0 auto;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-muted);
+    font-size: var(--fs-control);
+    font-weight: 700;
+    font-style: italic;
+    cursor: pointer;
+    line-height: 1;
+  }
+  .btn-info:hover { background: var(--surface-inset); color: var(--text); }
+
+  /* GitHub link icon in the header. */
+  .btn-gh {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    color: var(--text-muted);
+    text-decoration: none;
+  }
+  .btn-gh:hover { color: var(--text); }
+
+  /* Light/dark theme toggle. Same round icon-button footprint as .btn-gh.
+     The moon shows in light mode (click -> dark); the sun shows in dark mode
+     (click -> light). The swap is pure CSS, keyed off the data-theme attribute. */
+  .btn-theme {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+  .btn-theme:hover { color: var(--text); }
+  .btn-theme .icon-sun { display: none; }
+  .btn-theme .icon-moon { display: inline-flex; }
+  :root[data-theme="dark"] .btn-theme .icon-sun { display: inline-flex; }
+  :root[data-theme="dark"] .btn-theme .icon-moon { display: none; }
+
+  /* Paths dialog: reuses the modal pattern. */
+  #paths-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; }
+  #paths-content { background: var(--surface); color: var(--text); padding: 20px 22px; border-radius: 8px; width: 92%; max-width: 760px; max-height: 85vh; overflow-y: auto; }
+  #paths-content h3 { margin: 0 0 8px; }
+  #paths-close { float: right; cursor: pointer; font-size: 1.5rem; line-height: 1; }
+  .paths-hint { font-size: var(--fs-body); color: var(--text-muted); margin: 0 0 12px; line-height: 1.4; }
+  #paths-pre { background: var(--surface-inset); padding: 12px; border-radius: 6px; font-size: var(--fs-body); white-space: pre-wrap; overflow-wrap: anywhere; }
+  /* "Ask an AI if this is safe" line at the top of the paths dialog. */
+  .paths-safety { font-size: var(--fs-body); color: var(--text-muted); margin: 0 0 12px; }
+  /* Preferences block at the bottom of the paths/info dialog (auto-update). */
+  .paths-prefs { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .paths-prefs .pref-row { display: flex; align-items: center; gap: 8px; font-size: var(--fs-body); font-weight: 600; cursor: pointer; }
+  .paths-prefs .pref-row input { cursor: pointer; }
+  .paths-prefs .paths-hint { margin: 6px 0 0; }
+
+  /* Pricing-note badge, shown after the abbreviated unit on BOTH the In $ and the
+     Out $ cell (one note per model; either badge reads and edits it). A model WITH
+     a note shows a bold, always-visible orange mark. A model WITHOUT one shows a
+     faint add-a-note mark that appears only while its price cell is hovered, so the
+     table stays uncluttered. */
+  .pnote-icon {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    line-height: 15px;
+    text-align: center;
+    font-size: 0.78rem;
+    font-weight: 800;
+    border-radius: 50%;
+    vertical-align: middle;
+    cursor: pointer;
+    user-select: none;
+    border: 1px solid transparent;
+    transition: opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  /* Has a note: orange filled badge, impossible to miss. */
+  .pnote-icon.has-note {
+    color: #fff;
+    background: #f97316;
+    border-color: #ea580c;
+    box-shadow: 0 1px 2px rgba(234, 88, 12, 0.5);
+  }
+  .pnote-icon.has-note:hover { background: #ea580c; }
+  /* No note: hidden until you hover the price cell, then a faint mark to add one. */
+  .pnote-icon.pnote-empty { opacity: 0; color: var(--text-faint); }
+  table.dataTable tbody td:hover .pnote-icon.pnote-empty { opacity: 0.7; border-color: var(--border-soft); }
+  .pnote-icon.pnote-empty:hover { opacity: 1; color: var(--text-muted); background: var(--surface-inset); border-color: var(--border); }
+  /* The note glyph inside a has-note badge. Sized in em so it tracks the badge's
+     font-size (larger on the mobile card) and centres within the round badge. */
+  .pnote-ico { display: inline-block; width: 1em; height: 1em; vertical-align: -0.14em; }
+
+  /* Hover preview tip for the pricing-note badge. */
+  #pnote-tip {
+    display: none;
+    position: fixed;
+    z-index: 1100;
+    max-width: 320px;
+    background: var(--tip-bg);
+    color: var(--tip-text);
+    font-size: var(--fs-body);
+    line-height: 1.4;
+    padding: 7px 10px;
+    border-radius: 4px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+    pointer-events: none;
+  }
+
+  /* Pinned, editable pricing-note modal (a floating card, no backdrop, so the
+     table stays usable and a click outside dismisses it). */
+  #pnote-modal {
+    display: none;
+    position: fixed;
+    z-index: 1101;
+    width: 340px;
+    max-width: 92vw;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 28px var(--shadow-strong);
+    padding: 12px;
+  }
+  #pnote-modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  #pnote-modal-title { font-weight: 600; font-size: var(--fs-body); color: var(--text); }
+  #pnote-modal-close { cursor: pointer; font-size: 1.3rem; line-height: 1; color: var(--text-muted); }
+  #pnote-modal-close:hover { color: var(--text); }
+  #pnote-modal-text {
+    width: 100%;
+    min-height: 90px;
+    resize: vertical;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: var(--fs-control);
+    font-family: inherit;
+    line-height: 1.4;
+    box-sizing: border-box;
+    background: var(--input-bg);
+    color: var(--text);
+  }
+  .pnote-modal-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+
+  /* Draggable headers for column reordering. */
+  table.dataTable thead th.th-reorderable { cursor: grab; }
+  table.dataTable thead th.th-dragging { opacity: 0.5; cursor: grabbing; }
+  table.dataTable thead th.th-drop-target { box-shadow: inset 3px 0 0 var(--accent); }
+
+  #toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  #status {
+    display: none;
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: var(--fs-body);
+    color: #16a34a;
+    font-weight: 600;
+    background: var(--surface);
+    padding: 8px 20px;
+    border-radius: 6px;
+    box-shadow: 0 2px 8px var(--shadow-strong);
+    z-index: 1000;
+  }
+  #status.err { color: #dc2626; }
+  #status.visible { display: block; }
+
+  #db-status {
+    flex: 0 0 auto;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #16a34a;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    cursor: help;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    transition: all 0.3s ease;
+  }
+  #db-status::before {
+    content: '';
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.9);
+    transition: all 0.3s ease;
+  }
+  #db-status.online {
+    background: #16a34a;
+    box-shadow: 0 0 10px rgba(22, 163, 74, 0.5);
+  }
+  #db-status.offline {
+    background: #dc2626;
+    box-shadow: 0 0 10px rgba(220, 38, 38, 0.5);
+  }
+  #db-status.syncing {
+    background: #f59e0b;
+    animation: pulse 1s infinite;
+    box-shadow: 0 0 10px rgba(245, 158, 11, 0.5);
+  }
+  #db-status.processing {
+    background: #3b82f6;
+    animation: pulse 0.5s infinite;
+    box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.6; transform: scale(0.9); }
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  .notes-display { display: block; min-height: 20px; padding: 2px 4px; border-radius: 3px; cursor: pointer; }
+  .notes-display:hover { background: var(--surface-inset); }
+  .notes-placeholder { color: var(--text-faint); font-style: italic; }
+
+  .notes-input {
+    width: 100%;
+    min-height: 60px;
+    height: 60px;
+    resize: vertical;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    overflow-y: auto;
+    line-height: 1.4;
+    padding: 2px 5px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-size: var(--fs-control);
+    font-family: inherit;
+    display: block;
+    background: var(--input-bg);
+    color: var(--text);
+  }
+
+  /* width:100% keeps the table spanning its container even when the columns no
+     longer need the room; the surplus goes to the columns as slack rather than to
+     an empty margin beside the table. */
+  table.dataTable { font-size: var(--fs-body); background: var(--surface); table-layout: auto; color: var(--text); width: 100%; }
+  /* Cell padding is in rem, so it tracks the text size rather than standing still
+     while the text around it grows and shrinks. */
+  table.dataTable thead th { white-space: nowrap; padding: 0.6rem 1.2rem !important; vertical-align: top; }
+  table.dataTable tbody td { vertical-align: middle; padding: 0.4rem 0.8rem !important; }
+  table.dataTable thead th { white-space: nowrap !important; text-align: left !important; }
+  /* Left-align every desktop body cell (header is already left, above). !important
+     beats the DataTables auto type-detection, which otherwise right-aligns numeric
+     columns and centres icon columns. The mobile cards are already left-aligned. */
+  table.dataTable tbody td { text-align: left !important; }
+
+  /* Desktop table only: taller rows and a stronger row divider so the eye separates
+     one row from the next more easily. Scoped above the card breakpoint so the cards
+     (which restyle rows entirely) are untouched. The divider overrides DataTables'
+     faint tbody>tr>* border-top (rgba(0,0,0,0.15)); an id selector outranks it, and
+     var(--border) carries the theme so it darkens correctly in dark mode too. */
+  @media (min-width: 1300px) {
+    table.dataTable tbody td { padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; }
+    #models tbody > tr > * { border-top-color: var(--border); }
+  }
+  /* The panel the table sits on. DataTables 2.x names this wrapper .dt-container;
+     the padding is what insets the table from the panel edge. */
+  .dt-container { background: var(--surface); padding: 1.2rem; border-radius: 8px; box-shadow: 0 1px 4px var(--shadow); }
+
+  /* Sticky table header: pinned just below the sticky #topbar.
+     Uses the child-combinator selector + !important to outrank the
+     DataTables sortable-header rule (which sets position:relative). */
+  table.dataTable thead > tr > th {
+    position: -webkit-sticky !important;
+    position: sticky !important;
+    top: 56px;
+    z-index: 20;
+    background: var(--surface);
+    box-shadow: inset 0 -1px 0 var(--border);
+  }
+
+  .tooltip { position: relative; display: inline-block; cursor: help; white-space: normal; overflow-wrap: break-word; max-width: 100%; }
+
+  /* Model names are long, so Name is capped at 20rem; without a cap it takes as much
+     width as the longest name and pushes the table sideways. A name too long for the
+     cap WRAPS onto another line rather than being trimmed - a truncated name is
+     unreadable, and the cell is already three lines tall.
+
+     min-width 16rem is measured, not guessed: across the 440-model catalog, 16rem
+     keeps 98% of "name + date" inside two lines (14.9rem gets 96%, and 20.6rem is
+     needed for the last 2% - 64px more table width to save nine models one line).
+     It is the floor the column may be squeezed to; the cap above is what it prefers. */
+  table.dataTable td.col-name, table.dataTable th.col-name {
+    width: 20rem; max-width: 20rem; min-width: 16rem; white-space: normal; overflow-wrap: break-word;
+  }
+  /* Speed / OCR / Rating carry only a tighter cell padding. They take no width hint:
+     each select sizes to its own content (see .speed-select below), and a column
+     width here would hold the column open wider than the control inside it. */
+  table.dataTable td.col-narrow { padding: 0.2rem !important; }
+  .tooltip .tooltiptext {
+    visibility: hidden; width: 300px; background-color: var(--tip-bg); color: var(--tip-text);
+    text-align: left; border-radius: 4px; padding: 8px; font-size: var(--fs-body);
+    position: absolute; z-index: 100; bottom: 125%; left: 0; margin-left: 0;
+    opacity: 0; transition: opacity 0.2s; white-space: normal; line-height: 1.4;
+  }
+  .tooltip:hover .tooltiptext { visibility: visible; opacity: 1; }
+
+  #modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; }
+  /* Flex column so the head (title + close) stays put and only the JSON body
+     scrolls. That keeps the close button pinned in the corner while long JSON
+     scrolls beneath it. position:relative anchors that absolute close button. */
+  #modal-content { background: var(--surface); color: var(--text); padding: 20px; border-radius: 8px; width: 80%; max-width: 800px; max-height: 80vh; position: relative; display: flex; flex-direction: column; overflow: hidden; }
+  /* Leave room at the head's right edge so the title never slides under the
+     absolutely-positioned close button. */
+  #modal-head { padding-right: 40px; }
+  /* Close "x": pinned to the modal's top-right corner, a >=32px hit area, muted
+     until hovered, above the content. */
+  #modal-close {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 1.6rem;
+    line-height: 1;
+    color: var(--text-muted);
+    border-radius: 6px;
+    z-index: 2;
+  }
+  #modal-close:hover { color: var(--text); background: var(--surface-inset); }
+  /* "Copy JSON" button in the details modal head - mobile only (revealed in the
+     card-view block); hidden in table view, where the JSON is easy to select by hand. */
+  #modal-copy {
+    display: none;
+    padding: 4px 12px;
+    font-size: var(--fs-control);
+    font-weight: 600;
+    color: #fff;
+    background: var(--accent);
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  #modal-copy:hover { background: var(--accent-hover); }
+  /* The ONLY monospace surfaces: preformatted blocks and the details-modal JSON. */
+  pre, #modal-json { font-family: var(--font-mono); }
+  pre { background: var(--surface-alt); padding: 12px; border-radius: 4px; overflow-x: auto; font-size: var(--fs-body); }
+  /* Details-modal JSON wraps on every viewport so a long line never forces a
+     horizontal scroll (the card-view block reinforces this). It
+     is the modal's scroll region (the head stays fixed above it). */
+  #modal-json { flex: 1 1 auto; min-height: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+
+  /* Per-measurement In/Out colour-threshold panel */
+  .btn-colors {
+    padding: 2px 10px;
+    font-size: var(--fs-control);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .btn-colors:hover { background: var(--surface-inset); }
+
+  /* Column show/hide dropdown: the button toggles a floating panel of one
+     checkbox per column. Unchecking a box hides that column (DataTables
+     column().visible()); the hidden set persists in settings. */
+  .col-toggle { position: relative; display: inline-block; }
+  .col-toggle-panel {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 60;
+    min-width: 180px;
+    max-height: 340px;
+    overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 6px 20px var(--shadow-strong);
+    padding: 6px;
+  }
+  .col-toggle.open .col-toggle-panel { display: block; }
+  .col-toggle-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px;
+    font-size: var(--fs-control);
+    color: var(--text);
+    cursor: pointer;
+    white-space: nowrap;
+    border-radius: 4px;
+  }
+  .col-toggle-item:hover { background: var(--surface-inset); }
+  .col-toggle-item input { cursor: pointer; }
+  #color-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; }
+  #color-modal-content { background: var(--surface); color: var(--text); padding: 20px; border-radius: 8px; width: 90%; max-width: 520px; max-height: 85vh; overflow-y: auto; }
+  #color-modal-content h3 { margin: 0 0 8px; }
+  #color-modal-close { float: right; cursor: pointer; font-size: 1.5rem; line-height: 1; }
+  .color-hint { font-size: var(--fs-body); color: var(--text-muted); margin: 0 0 12px; line-height: 1.4; }
+  #color-table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
+  #color-table th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); color: var(--text-muted); font-weight: 600; }
+  #color-table td { padding: 4px 6px; border-bottom: 1px solid var(--border-faint); }
+  #color-table td.cr-unit { white-space: nowrap; }
+  #color-table input { width: 84px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--input-bg); color: var(--text); }
+  #color-table td.cr-swatch span { display: inline-block; width: 14px; height: 14px; border-radius: 3px; margin-right: 3px; vertical-align: middle; }
+  .color-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+
+/* Filter Layout */
+.filters-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 14px;
+    background: var(--filters-bg);
+    padding: 10px;
+    border-radius: 6px;
+    font-size: var(--fs-body);
+}
+/* All filter controls flow on a single line; wrapping is only an overflow
+   fallback, never a forced break. */
+.filters-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+.filters-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.filter-input {
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--input-bg);
+    color: var(--text);
+    font-size: var(--fs-control);
+}
+.filter-select {
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--input-bg);
+    color: var(--text);
+    font-size: var(--fs-control);
+}
+.filter-select-sm {
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--input-bg);
+    color: var(--text);
+    font-size: var(--fs-control);
+}
+/* Fixed-size summary multiselect (Input / Output / Year). The native
+   <select multiple> is hidden and driven by a checkbox panel; the closed control
+   is a fixed-width button that never grows with the number of selections. The
+   button label is capped near the width of "Multiple selected" and clipped with
+   an ellipsis, so height and width stay stable. The panel mirrors the Columns
+   dropdown look so theming is shared. */
+.cdd-native { display: none; }
+.cdd { position: relative; display: inline-block; }
+.cdd-btn {
+    width: 180px;
+    padding: 4px 8px;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--input-bg);
+    color: var(--text);
+    font-size: var(--fs-control);
+    font-family: inherit;
+    cursor: pointer;
+}
+.cdd-btn::after { content: " \25BE"; color: var(--text-faint); }
+.cdd-btn.cdd-active { color: var(--text); font-weight: 600; }
+.cdd-panel {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 60;
+    min-width: 180px;
+    max-height: 300px;
+    overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 6px 20px var(--shadow-strong);
+    padding: 6px;
+}
+.cdd.open .cdd-panel { display: block; }
+.cdd-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px;
+    font-size: var(--fs-control);
+    color: var(--text);
+    cursor: pointer;
+    white-space: nowrap;
+    border-radius: 4px;
+}
+.cdd-item:hover { background: var(--surface-inset); }
+.cdd-item input { cursor: pointer; }
+.w-130 { width: 130px; }
+.w-110 { width: 110px; }
+.btn-clear {
+    padding: 4px 10px;
+    cursor: pointer;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: var(--fs-control);
+}
+.btn-clear:hover { background: var(--surface-inset); }
+
+/* "N of M" model counter. Two elements, one per layout: #model-count sits in the
+   desktop filter bar after Clear; #model-count-m sits in the mobile sort bar. Each is
+   hidden in the layout it does not belong to (the mobile one here on desktop, the
+   desktop one in the card-view block). Both are updated together in app.js. */
+.model-count {
+    font-size: var(--fs-control);
+    font-weight: 600;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+#model-count { margin-left: 4px; }
+#model-count-m { display: none; }
+
+/* The drawer's close (X) button. It exists only in the off-canvas drawer, so it is
+   hidden by default and revealed in the card-view block, pinned to the drawer's top
+   corner. The desktop filter bar never shows it. */
+.filters-close { display: none; }
+
+/* Undo / Redo of personal data edits. Grouped at the start of the filter row,
+   sharing the neutral filter-button look; disabled (dimmed) when their stack is
+   empty. The trailing margin sets the pair apart from the filters that follow. */
+.btn-history {
+    padding: 4px 10px;
+    cursor: pointer;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: var(--fs-control);
+}
+.btn-history:hover:not(:disabled) { background: var(--surface-inset); }
+.btn-history:disabled { opacity: 0.45; cursor: default; }
+#btn-redo { margin-right: 6px; }
+.table-full-width {
+    width: 100%;
+}
+
+/* Update-available banner */
+#update-banner {
+    display: none;
+    background: var(--banner-bg);
+    color: var(--banner-text);
+    border-bottom: 1px solid var(--banner-border);
+    padding: 8px 16px;
+    font-size: var(--fs-body);
+    text-align: center;
+    position: sticky;
+    top: 0;
+    z-index: 25;
+}
+#update-banner.show { display: block; }
+#update-banner a { color: var(--banner-link); font-weight: 600; }
+/* In-app self-update action buttons + progress text on the banner. */
+#update-banner .update-action {
+    margin-left: 8px;
+    padding: 3px 12px;
+    font-size: var(--fs-control);
+    font-weight: 600;
+    color: #fff;
+    background: var(--accent);
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+}
+#update-banner .update-action:hover:not(:disabled) { background: var(--accent-hover); }
+#update-banner .update-action:disabled { background: #94a3b8; cursor: progress; }
+#update-banner #app-update-progress { margin-left: 10px; font-style: italic; }
+#update-banner .update-dismiss {
+    margin-left: 12px;
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    color: var(--banner-link);
+    font-size: 15px;
+}
+#app-version {
+    font-size: var(--fs-body);
+    color: var(--text-faint);
+    margin-left: 10px;
+    align-self: center;
+}
+
+/* --- Third-party control theming (DataTables) -----------------------------
+   The bundled DataTables stylesheet assumes a light page and themes its own dark
+   mode off `html.dark`, which this app never sets (it uses :root[data-theme]).
+   These rules take over that job.
+
+   The leading `div` on the paging selectors is required, not stylistic:
+   datatables.min.css writes them as `div.dt-container .dt-paging .dt-paging-button`,
+   so a selector without it is one element-tag short and loses the cascade - even
+   with !important, which only ranks within a specificity tier. Dropping the `div`
+   hands the pager back to the bundled theme: the accent "current page" pill
+   disappears and hovering a button turns it near-black in light mode. */
+div.dt-container .dt-info,
+div.dt-container .dt-length,
+div.dt-container .dt-length label { color: var(--text-muted); font-size: var(--fs-body); }
+div.dt-container select,
+div.dt-container .dt-input {
+    background: var(--input-bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: var(--fs-control);
+}
+div.dt-container .dt-paging .dt-paging-button {
+    color: var(--text-muted) !important;
+}
+div.dt-container .dt-paging .dt-paging-button.current,
+div.dt-container .dt-paging .dt-paging-button.current:hover {
+    color: #fff !important;
+    background: var(--accent);
+    border: 1px solid var(--accent);
+}
+div.dt-container .dt-paging .dt-paging-button:hover {
+    color: var(--text) !important;
+    background: var(--surface-inset);
+    border: 1px solid var(--border);
+}
+
+/* --- Table cell components ------------------------------------------------
+   These render the table cells (built in app.js renderCell). They carry the
+   styling that used to be inline. Semantic colours (capability glow, the gold
+   star, the price/rating scales) are fixed and not themed; everything neutral
+   uses the theme tokens, so dark mode needs no per-cell overrides. */
+
+/* --- The Name cell: three lines -------------------------------------------
+   1. the model name, then the date
+   2. the capability icons, then the HuggingFace / OpenRouter / copy-id / note
+      controls
+   3. the personal note, when the model has one
+   Lines 1 and 2 must not wrap: they are a title and a row of marks, and a wrapped
+   mark row reads as a second, meaningless line. The note on line 3 is prose, so it
+   wraps. This is why the columns those controls came from could be dropped - each
+   is one glyph that belongs beside the thing it describes, not a column of its own. */
+/* Line 1: the name WRAPS onto as many lines as it needs, and the date follows it in
+   the same inline flow, so the date sits after the last word rather than being
+   pushed to a line of its own. That is why .tooltip is inline here and not the
+   inline-BLOCK it is elsewhere: an inline-block is an atomic box, so a wrapped name
+   would take the full column width and shove the date onto its own line.
+   The date itself never breaks apart - a date split across two lines is unreadable -
+   so it wraps as one token or not at all. */
+.name-line { display: block; }
+.name-line .tooltip { display: inline; }
+.name-line .card-date { white-space: nowrap; }
+/* Line 2 is a row of marks; wrapped, it reads as a second meaningless line. */
+.meta-line { display: flex; align-items: center; gap: 6px; margin-top: 3px; line-height: 1; flex-wrap: nowrap; }
+
+/* Capability icons shown on the Name cell's second line (both desktop + card). */
+.cap-icon { font-size: 0.9rem; }
+.cap-think { filter: drop-shadow(0 0 2px #a855f7); }
+.cap-tool  { filter: drop-shadow(0 0 2px #f97316); }
+.cap-moe   { filter: drop-shadow(0 0 2px #06b6d4); }
+.cap-zdr   { filter: drop-shadow(0 0 2px #16a34a); }
+
+/* The date rides on line 1 of the Name cell in the card layout only; on desktop it
+   keeps its own sortable column, so it is hidden here. */
+.card-date { display: none; }
+
+/* Line 3: the personal note. It collapses while the note is empty - the span still
+   holds the placeholder, which is the click target the desktop table has always
+   used, and the note icon on line 2 is the way in when this line is hidden. Once
+   the editor opens, the placeholder is gone and this line shows itself. */
+.name-note { display: block; margin-top: 3px; }
+.name-note:has(.notes-placeholder) { display: none; }
+
+/* The personal-note icon on line 2. Faint until the model has a note, then it
+   takes the same orange as the pricing-note badge to read as "there is a note
+   here". These are two different notes (personal vs pricing) on two different
+   cells, so they never sit side by side. */
+.notes-edit {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--text-faint);
+    border-radius: 4px;
+    padding: 1px;
+}
+.notes-edit:hover, .notes-edit:focus-visible { color: var(--text); background: var(--surface-inset); outline: none; }
+.notes-edit.has-note { color: #f97316; }
+.notes-edit.has-note:hover { color: #ea580c; }
+.note-ico { display: block; width: 13px; height: 13px; }
+
+/* Favorite star: gold when set, faint grey otherwise (toggled by .is-fav). It is the
+   last mark on the Name cell's icon row. line-height:1 keeps it from pushing that row
+   taller than the icons beside it - the glyph is set larger than they are on purpose,
+   since it is the row's only control. */
+.fav-star {
+    cursor: pointer;
+    font-size: 1.2rem;
+    line-height: 1;
+    color: #cbd5e1;
+    border-radius: 4px;
+    user-select: none;
+}
+.fav-star.is-fav { color: #eab308; }
+.fav-star:hover { color: #eab308; }
+.fav-star:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Model name: a click target that opens the Details modal. Keeps the cell text
+   colour, stays visually prominent, and underlines on hover/focus to signal it
+   is interactive. */
+.name-open { cursor: pointer; color: inherit; font-weight: 600; }
+.name-open:hover, .name-open:focus-visible { text-decoration: underline; outline: none; }
+
+/* Copy-model-id icon beside the name (OpenRouter-listed models only). */
+.copy-id {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 6px;
+    vertical-align: middle;
+    cursor: pointer;
+    color: var(--text-faint);
+    border-radius: 4px;
+    padding: 1px;
+}
+.copy-id:hover, .copy-id:focus-visible { color: var(--text); background: var(--surface-inset); outline: none; }
+.copy-id.copied { color: #16a34a; }
+.copy-ico { display: block; width: 13px; height: 13px; }
+
+/* Date (and any nowrap) cell. */
+td.nowrap { white-space: nowrap; }
+
+/* HuggingFace link badge (brand colours, fixed). */
+.hf-link {
+    text-decoration: none;
+    display: inline-block;
+    font-weight: 600;
+    color: #FFD21E;
+    text-shadow: 1px 1px 0 #FF9D0B, -1px -1px 0 #FF323D;
+}
+
+/* Click the OpenRouter brand glyph to open the model page. */
+.or-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    text-decoration: none;
+    border-radius: 4px;
+    padding: 1px;
+    transition: background-color 0.12s;
+}
+.or-link:hover, .or-link:focus-visible { background: rgba(99, 102, 241, 0.12); outline: none; }
+/* The glyph carries the OpenRouter brand colour (theme-keyed --or-fill), not the
+   cell text colour, so it is filled rather than stroked. Sized by height with an
+   auto width so the 401.4:293.7 glyph keeps its aspect ratio. */
+.or-ico { display: block; height: 0.95rem; width: auto; fill: var(--or-fill); }
+
+/* The pricing unit under an In $/Out $ price, abbreviated ("tkn", "img"), with the
+   pricing-note badge after it. Its own line so the price above it stays the thing
+   you read first, and the full unit is on the title attribute for the long form. */
+.price-unit {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-top: 2px;
+    font-size: calc(var(--fs-body) * 0.78);
+    line-height: 1;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+/* Inline-edit dropdowns in the table (Speed, OCR, Rating - one shared look).
+   Each sizes to its own widest option (max-content) rather than to a shared fixed
+   width: their options are short words, and a fixed width held three columns open
+   wider than anything in them needed. */
+.speed-select, .ocr-quality-select, .rating-select {
+    border: 1px solid var(--border);
+    padding: 2px;
+    border-radius: 3px;
+    font-size: var(--fs-control);
+    background: var(--input-bg);
+    color: var(--text);
+    box-sizing: border-box;
+    width: max-content;
+}
+
+/* In $/Out $ price pill. Only its background-color is set inline (a continuous
+   threshold colour that cannot be enumerated); the rest lives here. */
+.price-cell {
+    color: #fff;
+    padding: 0.2rem 0.6rem;
+    border-radius: 3px;
+    font-weight: 500;
+    display: inline-block;
+}
+
+/* Rating dropdown option rows. The control itself shares the Speed/OCR look
+   (the .rating-select rule above); its option rows keep the 0-4 red-to-green
+   scale as a meaningful cue when the menu is open. The option text stays dark
+   in both themes so it never disappears on the lighter fills. */
+.rating-select option { color: #1e293b; }
+.ropt-0 { background: #e5e5e5; }
+.ropt-1 { background: #ef4444; }
+.ropt-2 { background: #eab308; }
+.ropt-3 { background: #84cc16; }
+.ropt-4 { background: #22c55e; }
+
+/* Colour-legend swatches in the thresholds panel. */
+.swatch-green  { background: #22c55e; }
+.swatch-yellow { background: #eab308; }
+.swatch-red    { background: #ef4444; }
+
+/* ==========================================================================
+   Card view
+   A pure-CSS skin over the SAME single #models DataTable - no second render
+   path. The table reflows to one card per row; each cell becomes a labeled
+   line (label from the per-cell data-label the renderer emits). The filter bar
+   turns into an off-canvas drawer (repositioned by transform only, never
+   re-parented). (The name's three-line layout and the Rating dropdown are shared
+   render/CSS changes that appear in the table too, by design; they live outside
+   this block.)
+
+   ONE breakpoint decides table vs cards, and app.js matches the SAME query to pick
+   the page length, so the layout and the paging can never disagree. 1299px is where
+   the table stops fitting: its min-content is ~1.2k px at the root size, so below
+   ~1300 a table could only be shown by scrolling it sideways. Everything narrower
+   than this is handled by the card itself, whose cells re-pack to whatever width
+   they are given - so no second breakpoint is needed, or wanted.
+   ========================================================================== */
+@media (max-width: 1299px) {
+  /* Card copy is larger than table copy: the root size is set small enough to fit a
+     wide table, and there is no table here to fit. It keeps the SAME token name, so
+     every card selector that resolves var(--fs-body) picks it up with no other
+     change. The control/title tokens are unchanged. */
+  :root { --fs-body: 1.15rem; }
+
+  /* Distinct page: the page (body, top bar, sort bar) sits on --bg while each card
+     sits on --card-bg, so the cards visibly separate from the page in both themes.
+     Their border and shadow reinforce the raised-tile read. */
+  body { padding: 0 10px 20px; background: var(--bg); }
+
+  /* Topbar is not sticky on a phone (the screen is short; a fixed bar wastes it).
+     It may wrap; the Filters button lives in the sort bar below, not here. */
+  #topbar { flex-wrap: wrap; gap: 8px; background: var(--bg); position: static; }
+  /* The Filters button is the first cell of the #mobile-sortbar grid; the grid gap
+     is 8px, and this margin lifts the gap to the Sort control on its right to a clear
+     20px so the two do not read as one control. */
+  /* margin-right:auto pushes Filters to the left edge and packs the Sort label,
+     dropdown and direction button together on the right. */
+  .btn-filters-toggle { display: inline-flex; align-items: center; min-height: 44px; margin-right: auto; }
+
+  /* Nothing sticks on a phone: the update banner scrolls away with the page. */
+  #update-banner { position: static; top: auto; }
+
+  /* --- Filter bar -> off-canvas drawer (CSS reposition only) --------------
+     The transition lives on the OPEN state, never on this base rule. If the base
+     carried it, crossing the 1300 breakpoint (when this rule first applies its
+     translateX) would animate the drawer sliding off-screen - a flash on every
+     desktop<->card resize. With the transition only on the open state, entering
+     card view places the drawer off-screen INSTANTLY, opening animates, and closing
+     (the open class is removed, so this transition-less base rule takes over) is
+     instant. Instant close is the deliberate trade for a flash-free breakpoint with
+     no JS. */
+  .filters-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 88%;
+    max-width: 340px;
+    margin: 0;
+    border-radius: 0;
+    overflow-y: auto;
+    z-index: 1200;
+    transform: translateX(-100%);
+    box-shadow: 2px 0 18px var(--shadow-strong);
+  }
+  body.filters-drawer-open .filters-container { transform: none; transition: transform 0.25s ease; }
+  #filters-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    z-index: 1150;
+  }
+  body.filters-drawer-open #filters-backdrop { display: block; }
+
+  /* Close (X) at the top of the drawer, pinned to the top-right corner. It is a
+     flex item of the column drawer, aligned to the right and made sticky so it stays
+     reachable while the filter list scrolls under it. */
+  .filters-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    align-self: flex-end;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    /* The drawer is a scrolling flex column; without flex-shrink:0 the button would
+       be squeezed below its 40px along the main (vertical) axis when the filter list
+       overflows. Fixed so the tap target stays 40x40. */
+    flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text-muted);
+    font-size: 1.6rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .filters-close:hover, .filters-close:focus-visible { color: var(--text); background: var(--surface-inset); outline: none; }
+
+  /* Stack the filters and size every control up for touch. */
+  .filters-row { flex-direction: column; align-items: stretch; gap: 12px; }
+  .filters-label { justify-content: space-between; }
+  .filters-container .filter-input,
+  .filters-container .filter-select,
+  .filters-container .filter-select-sm,
+  .filters-container .btn-clear,
+  .filters-container .btn-history,
+  .filters-container .btn-colors {
+    min-height: 42px;
+    font-size: var(--fs-control);
+    width: 100%;
+  }
+  #btn-redo { margin-right: 0; }
+  .filters-container .w-130, .filters-container .w-110 { width: 100%; }
+
+  /* Summary multiselect in the drawer: full-width trigger and an inline (not
+     floating) checkbox panel so it flows in the stacked filter column. */
+  .filters-container .cdd { width: 100%; }
+  .filters-container .cdd-btn { width: 100%; min-height: 42px; }
+  .filters-container .cdd-panel {
+    position: static;
+    box-shadow: none;
+    width: 100%;
+    max-height: 260px;
+    margin-top: 8px;
+  }
+
+  /* Column show/hide inside the drawer: full-width trigger and an inline (not
+     floating) panel so the checkbox list flows in the stacked filter column. */
+  .filters-container .col-toggle { width: 100%; }
+  .filters-container .col-toggle-panel {
+    position: static;
+    box-shadow: none;
+    width: 100%;
+    max-height: 300px;
+    margin-top: 8px;
+  }
+
+  /* --- Mobile sort + pager bar ------------------------------------------- */
+  /* Sticky under the topbar. Drives the same DataTables order as a desktop
+     header click (wired in app.js). */
+  /* Sort bar grid: the Filters button on the left, the sort field filling the
+     middle, and the direction toggle on the right - all on one row. Not sticky
+     (the top bar is not either). */
+  #mobile-sortbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    position: static;
+    top: auto;
+    z-index: 24;
+    background: var(--bg);
+    padding: 8px 0;
+    margin: 0 0 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  /* Counter swap: the desktop counter (which rides inside the drawer here) is hidden,
+     and the mobile counter in the sort bar is shown - it sits just left of the Sort
+     label, in the right-hand cluster (Filters is pushed left by its margin). */
+  #model-count { display: none; }
+  #model-count-m { display: inline; flex: 0 0 auto; }
+  #mobile-sortbar .msb-sort { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+  #mobile-sortbar .msb-sort > span { font-size: var(--fs-body); font-weight: 600; color: var(--text-muted); }
+  /* The sort select sizes to its widest option, not to the bar: flex:0 stops it
+     growing, width:max-content shrinks it to its content, and max-width:100% keeps it
+     from overflowing on a narrow screen. */
+  #m_sort {
+    flex: 0 1 auto;
+    width: max-content;
+    max-width: 100%;
+    min-height: 44px;
+    font-size: var(--fs-control);
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--input-bg);
+    color: var(--text);
+  }
+  #m_sort_dir {
+    flex: 0 0 auto;
+    width: 44px;
+    height: 44px;
+    font-size: var(--fs-control);
+    line-height: 1;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  /* --- Table -> stacked card grid ---------------------------------------- */
+  /* Only the cards are raised; the wrapper (DataTables 2.x .dt-container) is flat
+     so the cards read as tiles. The wrapper is a grid that places the info line,
+     the pager, and the page-length control across two rows: the info line spans
+     its own row, then the pager sits left and "N / page" right on the next row.
+     DataTables emits info/paging/length inside .dt-layout-row/.dt-layout-cell
+     wrappers (and the table in its own wrapper); display:contents flattens those
+     so each control becomes a direct grid item placed by area. */
+  .dt-container {
+    background: transparent;
+    box-shadow: none;
+    padding: 8px 0;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "table  table"
+      "info   info"
+      "paging length";
+    align-items: center;
+    column-gap: 16px;
+    row-gap: 6px;
+  }
+  /* These selectors carry redundant-looking `div` and `.dt-layout-table` parts on
+     purpose. datatables.min.css sets `display: table`/`block` on the same wrappers
+     via `div.dt-container div.dt-layout-row.dt-layout-table div.dt-layout-cell`,
+     so a shorter selector loses on specificity, the wrappers never flatten, the
+     grid areas below never apply, and the table is auto-placed into the pager's
+     column instead of spanning the row. style.css loads after datatables.min.css,
+     so matching their specificity is enough to win. */
+  div.dt-container > div.dt-layout-row,
+  div.dt-container > div.dt-layout-row.dt-layout-table,
+  div.dt-container > div.dt-layout-row > div.dt-layout-cell,
+  div.dt-container > div.dt-layout-row.dt-layout-table > div.dt-layout-cell {
+    display: contents;
+  }
+  #models { grid-area: table; }
+  .dt-container .dt-info { grid-area: info; }
+  .dt-container .dt-paging { grid-area: paging; justify-self: start; }
+  .dt-container .dt-length { grid-area: length; justify-self: end; }
+  .dt-container .dt-paging .dt-paging-button { min-width: 40px; min-height: 40px; }
+
+  #models, #models thead, #models tbody, #models tr, #models td { display: block; }
+  /* Header row is hidden; the mobile sort bar replaces header-click sorting. */
+  #models thead { display: none; }
+  /* Neutralise the desktop sticky header offset here (thead is hidden anyway),
+     so the 56px top tied to the desktop topbar never leaks into card mode. */
+  table.dataTable thead > tr > th { position: static !important; top: auto; }
+
+  /* Each row is a card, and the card has NO COLUMNS. It is a wrapping flex line:
+     every cell is a block that flows next to its neighbours, grows to absorb the
+     leftover space on its line, and stops at its own max-content width.
+
+     Why not a grid: any grid - even `repeat(auto-fill, minmax(4.5rem, max-content))`
+     - defines TRACKS, and tracks are a fixed rhythm the cells must snap to. A cell
+     that needs 50px still occupies a 4.5rem track, and whatever the last track
+     cannot use is stranded at the card's edge. Flex has no tracks: each cell is
+     measured on its own, so the cells pack tighter and the wasted space at the end
+     of a line is what is left after real content, not after a grid step.
+
+     The three declarations that make it work, and why each is load-bearing:
+     - `flex-wrap: wrap` - cells spill onto a new line instead of squashing.
+     - `flex: 1 1 auto` on the cells - basis is the cell's own content size, and
+       grow:1 lets it take a share of whatever its line has spare.
+     - `max-width: max-content` on the cells - the ceiling. Without it, grow would
+       stretch the few cells on a short line (typically the LAST line) across the
+       whole card. With it, a cell can never be wider than its content can use.
+
+     `align-items: stretch` (the default, stated here because it is the point) sizes
+     every cell on a line to that LINE's height: align-items positions items within
+     their own flex line, so each line self-equalises and cells that share a line
+     share a top and a bottom edge. */
+  #models tbody tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    /* Comfortable breathing room between cells (row 10px, column 14px) - the earlier
+       5x8 read cramped. Speed/OCR/Rating add more on top of this (below). */
+    gap: 10px 14px;
+    margin: 0 0 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--card-bg);
+    box-shadow: 0 1px 2px var(--shadow), 0 4px 12px rgba(0,0,0,.10);
+  }
+  /* Every cell: flows next to its neighbours, absorbs its share of the leftover on
+     its line, never exceeds its own content width. min-width:0 lets a cell shrink
+     below its content when a line is tight, instead of forcing a sideways scroll. */
+  #models tbody td {
+    display: block;
+    flex: 1 1 auto;
+    max-width: max-content;
+    min-width: 0;
+    padding: 0;
+    border: none;
+    text-align: left;
+    white-space: normal;
+    font-size: var(--fs-body);
+    color: var(--text);
+  }
+  /* The bundled sheet stripes alternate rows by painting each CELL with an
+     inset box-shadow (`inset 0 0 0 9999px`), not the row. A card is one tile on
+     one background, and its cells are separate blocks with gaps between them, so that
+     shadow does not read as a stripe here - it paints a grey rectangle behind every
+     cell. The card is the unit that alternates nothing, so the cells carry no fill
+     of their own. */
+  #models tbody tr > * { box-shadow: none; }
+
+  /* Drop the desktop column widths: on a card a cell is sized by flex, not by a
+     column, and a leftover width hint would fight it. */
+  table.dataTable td.col-name, table.dataTable th.col-name,
+  table.dataTable td.col-narrow, table.dataTable th.col-narrow {
+    width: auto; max-width: none; min-width: 0;
+  }
+  /* Zero the table's cell padding for the three control cells, keyed on data-col
+     rather than the .col-narrow class: that class is a DESKTOP width hint and is set
+     on Speed and OCR but not Rating, so keying on it left Rating alone carrying the
+     padding its neighbours had stripped - it stood 11px taller than them and its
+     select was 22px narrower, in a row that is meant to read as three matching
+     controls. In card view these three are the same thing and are styled as such. */
+  #models tbody td[data-col="speed"],
+  #models tbody td[data-col="ocr_quality"],
+  #models tbody td[data-col="rating"] { padding: 0 !important; }
+  /* Speed / OCR / Rating sit tighter together than they should - they read as one
+     clump. A horizontal margin on each adds to the card's column gap, so ADJACENT
+     controls get the general 14px gap PLUS 2x8px of margin = ~30px between them,
+     clearly more separation than the other cells without touching their padding
+     (which stays 0 so the three stay the same height). */
+  #models tbody td[data-col="speed"],
+  #models tbody td[data-col="ocr_quality"],
+  #models tbody td[data-col="rating"] { margin-inline: 8px; }
+
+  /* The card's title line: the Name cell alone, holding its own three lines - name
+     + date, the icon row (which ends with the favourite star), and the note.
+
+     A flex container breaks lines on the items' BASE sizes, before any growing, so a
+     100% basis is what keeps the title on a line of its own: no other cell can share
+     it. The Name cell is also the one exception to max-width: max-content - it is the
+     card's title and should hold the line, not shrink to its text.
+
+     The Name cell is FIRST in the DOM, so nothing here needs `order`: the card sets
+     no order at all, and every cell after the title simply flows. */
+  #models tbody td[data-col="name"] {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+
+  /* The date, the personal note and the favourite star ride inside the Name cell,
+     and the total+active params fold into the single Params cell, so these columns
+     are not drawn twice. */
+  #models tbody td[data-col="created_at"]        { display: none; }
+  #models tbody td[data-col="active_parameters"] { display: none; }
+
+  /* Every other cell simply flows: Context, Params, Size, the modalities, the two
+     prices, and the three editors pack onto as many lines as the card needs and
+     re-pack as it resizes. There is deliberately no per-field placement here - the
+     card has no columns to place them into. */
+
+  /* Type scale. */
+  #models tbody td[data-col="name"] { font-size: var(--fs-body); font-weight: 650; }
+  #models tbody td[data-col="name"] .name-open { color: var(--text); }
+  /* On a card the name+date and the icon row share ONE line: the icon row trails the
+     title inline and wraps only if it must (it is an inline-flex box, so a name that
+     wraps to several lines leaves the icons after its last word). The note keeps its
+     own line below. Desktop keeps the three separate lines - this is card-only. */
+  #models tbody td[data-col="name"] .name-line:not(.meta-line) { display: inline; }
+  #models tbody td[data-col="name"] .meta-line {
+    display: inline-flex;
+    vertical-align: middle;
+    flex-wrap: wrap;
+    margin-top: 0;
+    margin-left: 8px;
+  }
+  /* The date shows on line 1 after the name; its own column stays hidden. */
+  /* The date follows the name in the same inline flow, so it needs its own space
+     before it - there is no gap to inherit here, and "Aion-2.0(2026-02-23)" reads as
+     one token. An em-relative margin so it tracks the text size. */
+  .card-date { display: inline; margin-left: 0.35em; font-size: var(--fs-body); font-weight: 400; color: var(--text-muted); }
+  .card-date::before { content: "("; }
+  .card-date::after { content: ")"; }
+  /* The note is prose, not a heading - drop the name cell's weight for it. */
+  .name-note { font-weight: 400; }
+  #models tbody td[data-col="context_length"],
+  #models tbody td[data-col="parameters"],
+  #models tbody td[data-col="disk_size_gb"],
+  #models tbody td[data-col="prompt"],
+  #models tbody td[data-col="completion"] {
+    font-size: var(--fs-body);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Labels: no generic per-cell label; only a few cells get a small caption
+     from their data-label. */
+  #models tbody td::before { content: none; }
+  #models tbody td[data-col="input_modalities"]::before,
+  #models tbody td[data-col="output_modalities"]::before,
+  #models tbody td[data-col="speed"]::before,
+  #models tbody td[data-col="ocr_quality"]::before,
+  #models tbody td[data-col="rating"]::before {
+    content: attr(data-label) " ";
+    font-size: calc(var(--fs-body) * 0.72);
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-right: 4px;
+  }
+
+  /* Every card caption sits ON ITS OWN LINE, above its value. Inline, a caption and
+     its value compete for one content-sized track: whichever cell runs out of room
+     wraps, so it stands taller than its neighbours and the row stops reading as a
+     row - and which cell loses depends on the caption's length and the track it
+     landed in, so no two cards agree. Stacked, every value starts at the same
+     baseline whatever the text. */
+  #models tbody td[data-col="speed"]::before,
+  #models tbody td[data-col="ocr_quality"]::before,
+  #models tbody td[data-col="rating"]::before,
+  #models tbody td[data-col="input_modalities"]::before,
+  #models tbody td[data-col="output_modalities"]::before {
+    display: block;
+    margin: 0 0 1px;
+    letter-spacing: .04em;
+    font-weight: 700;
+  }
+  /* Each control then fills its cell, so all three are the same width. */
+  #models tbody td[data-col="speed"] .speed-select,
+  #models tbody td[data-col="ocr_quality"] .ocr-quality-select,
+  #models tbody td[data-col="rating"] .rating-select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* Derived suffixes rendered in CSS. Context already renders as a rounded "128k"
+     in the cell text (both views); size gets a " GB" suffix; params gets its
+     combined "B / <active>B" suffix from data-parch. */
+  #models tbody td[data-col="disk_size_gb"]:not(:empty)::after {
+    content: " GB";
+    color: var(--text-muted);
+    font-size: var(--fs-body);
+  }
+  /* Total + active params, combined into this one cell: "398" + "B / 94B". */
+  #models tbody td[data-col="parameters"]:not(:empty)::after { content: attr(data-parch); }
+
+  /* Row-2 columns (Context / Params / Size) are label-over-value: an uppercase
+     caption on its own line, then the value below it. */
+  #models tbody td[data-col="context_length"]::before,
+  #models tbody td[data-col="parameters"]:not(:empty)::before,
+  #models tbody td[data-col="disk_size_gb"]:not(:empty)::before {
+    display: block;
+    font-size: calc(var(--fs-body) * 0.72);
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: 0 0 1px;
+  }
+  #models tbody td[data-col="context_length"]::before { content: "Context"; }
+  #models tbody td[data-col="parameters"]:not(:empty)::before { content: "Params"; }
+  #models tbody td[data-col="disk_size_gb"]:not(:empty)::before { content: "Size"; }
+
+  /* In / Out are label-over-value like Context/Params/Size: the uppercase caption on
+     its own line, then the value, its abbreviated unit and the pricing-note icon
+     together on the line below - so In reads "IN" over "2 tkn [note]" exactly as
+     Context reads "CONTEXT" over "256k". nowrap keeps that value line as one unit
+     whatever the price length. */
+  #models tbody td[data-col="prompt"],
+  #models tbody td[data-col="completion"] { white-space: nowrap; }
+  #models tbody td[data-col="prompt"]::before,
+  #models tbody td[data-col="completion"]::before {
+    display: block;
+    font-size: calc(var(--fs-body) * 0.72);
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: 0 0 1px;
+  }
+  #models tbody td[data-col="prompt"]::before { content: "In"; }
+  #models tbody td[data-col="completion"]::before { content: "Out"; }
+  /* The abbreviated unit and the note icon sit INLINE after the price pill (not on a
+     line below it, as they do in the desktop table), so the value line is one row. */
+  #models tbody td[data-col="prompt"] .price-unit,
+  #models tbody td[data-col="completion"] .price-unit {
+    display: inline-flex;
+    vertical-align: middle;
+    margin-top: 0;
+    margin-left: 4px;
+  }
+
+  /* Keep the combined total + active value on one line ("398B / 94B") in the
+     single Params cell rather than wrapping it. */
+  #models tbody td[data-col="parameters"] { white-space: nowrap; }
+
+  /* Collapse absent cells (a missing size) so cards stay compact. Speed/OCR keep a
+     select (never :empty) and show an em-dash unset. */
+  #models tbody td:empty { display: none; }
+
+  /* Editors keep a comfortable tap size. */
+  #models tbody td .speed-select,
+  #models tbody td .ocr-quality-select,
+  #models tbody td .rating-select { width: auto; min-width: 90px; }
+
+  /* --- Pricing-note icon on a card. There is no hover on touch, so it is visible at
+     rest and tappable - a tap opens the same #pnote-modal the desktop click opens. It
+     is the very note glyph the desktop reveals on cell hover, not a boxed control.
+     Padding gives a comfortable tap target; background-clip keeps that padding
+     transparent so a FILLED (has-note) badge stays its true round size. */
+  #models tbody td .pnote-icon {
+    opacity: 1;
+    width: 22px;
+    height: 22px;
+    line-height: 20px;
+    font-size: .9rem;
+    padding: 8px;
+    background-clip: content-box;
+  }
+  /* Empty (no note yet): just the muted note glyph - no square, no fill, no border -
+     sized a touch larger so it is easy to hit. Tapping it opens the pricing-note
+     editor for a first note. */
+  #models tbody td .pnote-icon.pnote-empty {
+    width: auto;
+    height: auto;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    color: var(--text-muted);
+  }
+  #models tbody td .pnote-icon.pnote-empty .pnote-ico { width: 1.15rem; height: 1.15rem; }
+
+  /* The Name-cell hover description is a 300px absolutely-positioned layer that
+     never fires on touch yet would push a page-level horizontal scrollbar past a
+     narrow card. Drop it here (the same description is reachable through the
+     Details modal); desktop hover is untouched. */
+  .tooltip .tooltiptext { display: none; }
+
+  /* --- Details modal: full-screen sheet with a wrapping, scrollable JSON body
+     and a Copy button in the head. */
+  #modal-content {
+    width: calc(100vw - 24px);
+    max-width: none;
+    height: calc(100vh - 24px);
+    max-height: none;
+    margin: 12px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+  }
+  #modal-head { display: flex; align-items: center; gap: 10px; }
+  #modal-head h3 { margin: 0; flex: 1; }
+  #modal-copy { display: inline-block; }
+  #modal-json {
+    flex: 1;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    font-size: var(--fs-body);
+    line-height: 1.4;
+  }
+
+  /* Floating pnote editor / tip: keep them within the viewport width. */
+  #pnote-modal { width: 92vw; }
+}

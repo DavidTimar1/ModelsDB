@@ -1,0 +1,9 @@
+# Keep the SHA-pinned GitHub Actions current: Dependabot opens a PR when a pinned
+# action has a newer release, bumping both the commit SHA and its version comment.
+# (Runs on the public/remote repo only.)
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
