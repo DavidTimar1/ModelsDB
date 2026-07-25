@@ -3,7 +3,10 @@ $(async function() {
   // link, the personal note and the favourite star ride inside the Name cell; the
   // pricing unit and its note badge ride inside the In $/Out $ cells; the ZDR state
   // is a capability icon on the Name cell. Date keeps its own column so it stays
-  // sortable, and also renders inside the Name cell for the card layout.
+  // sortable, and also renders inside the Name cell for the card layout. The
+  // user-defined personal columns (text, or a single-select dropdown of text or
+  // number labels - the generic replacement for the old fixed Speed/Rating/OCR
+  // fields) are appended below, once their definitions are fetched.
   let colConfig = [
     { title: 'Name', target: 'name' },
     { title: 'Date', target: 'created_at' },
@@ -14,10 +17,7 @@ $(async function() {
     { title: 'Out $', target: 'completion', titleHtml: '<th title="Output price, with its pricing unit abbreviated beneath it. A note icon marks a pricing note - hover to read, click to edit.">Out $</th>' },
     { title: 'P', target: 'parameters', titleHtml: '<th title="Parameters (in billions)">P</th>' },
     { title: 'AP', target: 'active_parameters', titleHtml: '<th title="Active parameters (in billions)">AP</th>' },
-    { title: 'Size (GB)', target: 'disk_size_gb', titleHtml: '<th title="On-disk size in GB (rounded up) of the native-precision weights on the canonical HuggingFace repo (excludes quantized/GGUF mirrors)">Size (GB)</th>' },
-    { title: 'Speed', target: 'speed' },
-    { title: 'Rating', target: 'rating' },
-    { title: 'OCR', target: 'ocr_quality' }
+    { title: 'Size (GB)', target: 'disk_size_gb', titleHtml: '<th title="On-disk size in GB (rounded up) of the native-precision weights on the canonical HuggingFace repo (excludes quantized/GGUF mirrors)">Size (GB)</th>' }
   ];
 
   let rawData = [];
@@ -39,6 +39,64 @@ $(async function() {
     const sr = await fetch('/api/settings');
     savedSettings = (await sr.json()) || {};
   } catch (e) { console.error('Failed to load settings', e); savedSettings = {}; }
+
+  // User-defined personal columns: fetched once here, alongside settings, so
+  // their definitions can extend colConfig BEFORE the table is built - the same
+  // reason settings are fetched up front. Each becomes one colConfig entry with
+  // target 'cc_<id>' (stable across a rename, since there is none - it is tied
+  // to the column's id) and a `custom` back-reference to its definition (type +
+  // options), which renderCell/the edit handlers use to render and sort it
+  // generically instead of switching on a hardcoded field name.
+  let customColumns = [];
+  try {
+    const ccr = await fetch('/api/custom-columns');
+    customColumns = (await ccr.json()) || [];
+  } catch (e) { console.error('Failed to load custom columns', e); customColumns = []; }
+  let customColumnsById = {};
+  customColumns.forEach(function(c) {
+    customColumnsById[c.id] = c;
+    colConfig.push({ title: c.name, target: 'cc_' + c.id, custom: c });
+  });
+  // The mobile sort field select is a fixed set of common columns in index.html;
+  // extend it with one <option> per custom column so it stays reachable from the
+  // mobile sort bar too (matching how #f_year/#f_measurement below build their
+  // option lists from live data).
+  customColumns.forEach(function(c) {
+    $('#m_sort').append($('<option></option>').attr('value', 'cc_' + c.id).text(c.name));
+  });
+
+  // One filter control per custom column, generated into #cc-filters (a
+  // display:contents wrapper in the filter bar, right after the Unit filter) -
+  // there is no fixed set to hardcode, since columns are created/deleted at
+  // runtime. A dropdown-type column (dropdown_text/dropdown_number) gets a
+  // <select> of "All" plus its own option values, matching the UX of the old
+  // fixed f_speed/f_ocr single-selects this feature replaced. A text-type
+  // column gets a plain text <input> that substring-matches, matching #f_search.
+  // Every id is 'f_custom_' + the column's id, read by the central search
+  // predicate below and by saveFilters/loadFilters. Built once here, before the
+  // 'change keyup' delegation below binds - a fresh page load (the same
+  // rebuild-on-load the rest of custom-column management already uses for
+  // create/delete) is what keeps this set in sync with live columns.
+  function buildCustomColumnFilters() {
+    var $c = $('#cc-filters').empty();
+    customColumns.forEach(function(col) {
+      if (col.type === 'text') {
+        $c.append(
+          $('<input type="text" class="filter-input">')
+            .attr('id', 'f_custom_' + col.id)
+            .attr('placeholder', col.name + '...')
+        );
+      } else {
+        var $sel = $('<select class="filter-select-sm"></select>').attr('id', 'f_custom_' + col.id);
+        $sel.append($('<option value=""></option>').text('All'));
+        (col.options || []).forEach(function(o) {
+          $sel.append($('<option></option>').attr('value', o).text(o));
+        });
+        $c.append($('<label class="filters-label"></label>').text(col.name).append($sel));
+      }
+    });
+  }
+  buildCustomColumnFilters();
 
   // Reorder colConfig in place to match a saved column order (an array of
   // target names). Unknown/missing targets are ignored; any column not named in
@@ -75,7 +133,7 @@ $(async function() {
   for (let row of rawData) {
     let cells = '';
     for (let c of colConfig) {
-      cells += renderCell(row, c.target, c.title);
+      cells += renderCell(row, c);
     }
     // Row-level model facts the filters read. data-meas carries the RAW pricing
     // unit ("per 1M tokens"); the In $/Out $ cells render only its abbreviation, and
@@ -104,17 +162,35 @@ $(async function() {
   }, 30000);
 
   let dtCols = [];
-  // Columns that need numeric sorting via data-dt-order
-  let numericCols = ['rating', 'speed', 'ocr_quality', 'context_length', 'prompt', 'completion', 'parameters', 'active_parameters', 'disk_size_gb'];
+  // Columns that need numeric sorting via data-dt-order. Dropdown-type custom
+  // columns sort by their option position (generalizing the old fixed
+  // Speed/OCR/Rating ORDER maps - see renderCell), so their targets are added
+  // below; text-type custom columns sort alphabetically instead and are
+  // deliberately left out of this list.
+  let numericCols = ['context_length', 'prompt', 'completion', 'parameters', 'active_parameters', 'disk_size_gb'];
+  customColumns.forEach(function(c) {
+    if (c.type !== 'text') numericCols.push('cc_' + c.id);
+  });
   colConfig.forEach((c, idx) => {
     let d = { targets: [idx] };
     // Only a class here, never a width: DataTables renders columnDefs.width into a
     // <colgroup><col style="width:..."> in px. The column widths live in the
     // stylesheet as .col-name / .col-narrow, so one place governs them.
     if (c.target === 'name') d.className = 'col-name';
-    if (c.target === 'speed') d.className = 'col-narrow';
-    if (c.target === 'ocr_quality') d.className = 'col-narrow';
-    if (numericCols.includes(c.target)) { d.orderDataType = 'data-dt-order'; d.type = 'num'; }
+    // Every dropdown-type custom column gets the same narrow treatment the old
+    // Speed/OCR columns had (each control sizes to its own content - see
+    // .col-narrow in style.css); a text-type one is left at its normal width
+    // since its values are not short fixed labels.
+    if (c.custom && c.custom.type !== 'text') d.className = 'col-narrow';
+    if (numericCols.includes(c.target)) {
+      d.orderDataType = 'data-dt-order';
+      d.type = 'num';
+    } else if (c.custom && c.custom.type === 'text') {
+      // Alphabetical sort: extract the same data-dt-order attribute (kept in
+      // sync with the cell's text on every edit) but skip the 'num' type so
+      // DataTables' automatic type detection sorts it as a string.
+      d.orderDataType = 'data-dt-order';
+    }
     dtCols.push(d);
   });
 
@@ -273,11 +349,6 @@ $(async function() {
        if(!outs.some(i => dOut.includes(i))) return false;
     }
 
-    var spd = $('#f_speed').val();
-    if(spd) {
-       if(spd !== $tr.find('.speed-select').val()) return false;
-    }
-
     var maxIn = parseFloat($('#f_max_in').val());
     if(!isNaN(maxIn)) {
        var inVal = parseFloat($tr.find('td[data-col="prompt"]').attr('data-dt-order') || '9999999999');
@@ -333,11 +404,6 @@ $(async function() {
       }
     }
 
-    var fOcr = $('#f_ocr').val();
-    if(fOcr) {
-      if(fOcr !== $tr.find('.ocr-quality-select').val()) return false;
-    }
-
     var fZdr = $('#f_zdr').val();
     if(fZdr === 'yes' && $tr.attr('data-zdr') !== '1') return false;
     if(fZdr === 'no'  && $tr.attr('data-zdr') === '1') return false;
@@ -345,6 +411,33 @@ $(async function() {
     var fMeas = $('#f_measurement').val();
     if(fMeas) {
        if(fMeas !== ($tr.attr('data-meas') || '').trim()) return false;
+    }
+
+    // One predicate per custom column, generated the same way its filter
+    // control was (buildCustomColumnFilters above) - AND-combined with every
+    // filter above, exactly like the fixed ones. A dropdown-type column's
+    // control lives in the row itself (.cc-select), read the same way queueSave
+    // reads it; a text-type column reuses rowCustomTextValue, the same helper
+    // queueSave and editHistory already use, so there is one definition of "this
+    // row's value" for a custom column. If the column's own cell is not in the
+    // DOM (its table column is hidden), there is nothing to test - like every
+    // other cell-sourced filter (see DESIGN.md's Filters section), hiding a
+    // column silently disables filtering on it rather than excluding every row.
+    for(var cci = 0; cci < customColumns.length; cci++) {
+      var cc = customColumns[cci];
+      var $cf = $('#f_custom_' + cc.id);
+      if(!$cf.length) continue;
+      var cv = $cf.val();
+      if(cc.type === 'text') {
+        var cq = (cv || '').toLowerCase().trim();
+        if(cq) {
+          var ctext = rowCustomTextValue($tr, cc.id);
+          if(ctext !== undefined && ctext.toLowerCase().indexOf(cq) === -1) return false;
+        }
+      } else if(cv) {
+        var $ccSel = $tr.find('.cc-select[data-col-id="' + cc.id + '"]');
+        if($ccSel.length && $ccSel.val() !== cv) return false;
+      }
     }
 
     return true;
@@ -445,7 +538,6 @@ $(async function() {
       f_context: $('#f_context').val(),
       f_in: $('#f_in').val(),
       f_out: $('#f_out').val(),
-      f_speed: $('#f_speed').val(),
       f_max_in: $('#f_max_in').val(),
       f_max_out: $('#f_max_out').val(),
       f_min_params: $('#f_min_params').val(),
@@ -455,7 +547,6 @@ $(async function() {
       f_tool: $('#f_tool').val(),
       f_moe: $('#f_moe').val(),
       f_has_notes: $('#f_has_notes').val(),
-      f_ocr: $('#f_ocr').val(),
       f_zdr: $('#f_zdr').val(),
       f_measurement: $('#f_measurement').val(),
       auto_update: $('#pref-auto-update').is(':checked'),
@@ -471,6 +562,13 @@ $(async function() {
       col_hidden: currentHiddenTargets(),
       order: table.order().map(function(o) { return [colConfig[o[0]].target, o[1]]; })
     };
+    // One 'f_custom_<id>' key per custom column, alongside the fixed f_* keys
+    // above - settings.json is an opaque blob the server just stores and
+    // returns, so a dynamic key per column needs no server-side change.
+    customColumns.forEach(function(c) {
+      var $f = $('#f_custom_' + c.id);
+      if ($f.length) state['f_custom_' + c.id] = $f.val();
+    });
     fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -493,7 +591,6 @@ $(async function() {
       if(s.f_context) $('#f_context').val(s.f_context);
     if(s.f_in  && s.f_in.length)  { $('#f_in').val(s.f_in).trigger('change'); }
     if(s.f_out && s.f_out.length) { $('#f_out').val(s.f_out).trigger('change'); }
-    if(s.f_speed) $('#f_speed').val(s.f_speed);
     if(s.f_max_in)  $('#f_max_in').val(s.f_max_in);
     if(s.f_max_out) $('#f_max_out').val(s.f_max_out);
     if(s.f_min_params) $('#f_min_params').val(s.f_min_params);
@@ -503,9 +600,16 @@ $(async function() {
     if(s.f_tool) $('#f_tool').val(s.f_tool);
     if(s.f_moe) $('#f_moe').val(s.f_moe);
     if(s.f_has_notes) $('#f_has_notes').val(s.f_has_notes);
-    if(s.f_ocr) $('#f_ocr').val(s.f_ocr);
     if(s.f_zdr) $('#f_zdr').val(s.f_zdr);
     if(s.f_measurement) $('#f_measurement').val(s.f_measurement);
+    // Restore each custom column's filter from its own 'f_custom_<id>' key. A
+    // column deleted since the settings were saved simply has no matching
+    // control, so its stale key is harmlessly ignored (not cleaned up here -
+    // saveFilters overwrites the whole blob on the next save anyway).
+    customColumns.forEach(function(c) {
+      var v = s['f_custom_' + c.id];
+      if (v) $('#f_custom_' + c.id).val(v);
+    });
     $('#pref-auto-update').prop('checked', !!s.auto_update);
     if(s.color_ranges) {
       // Merge saved thresholds over the defaults so new measurement types still
@@ -754,6 +858,11 @@ $(async function() {
   // carries and leaves every other curated field at its stored value. So a field with
   // no control to read is OMITTED, and the database keeps what it already has. Read
   // once, and include the key only if the control was really there.
+  //
+  // Custom columns (the generic personal-column system) follow the SAME omission
+  // rule, collected into one custom_values object keyed by column id: a hidden
+  // column's control is not in the DOM, so it is left out of custom_values
+  // entirely rather than sent as an empty value that would clear it server-side.
   function queueSave(tr) {
       if (!tr.attr('data-name')) return;
       const updateObj = { name: tr.attr('data-name') };
@@ -761,15 +870,6 @@ $(async function() {
       // The favourite star sits at the end of the Name cell's icon row.
       const fav = tr.find('.fav-star').attr('data-fav');
       if (fav !== undefined) updateObj.favorite = parseInt(fav, 10) || 0;
-
-      const speed = tr.find('.speed-select').val();
-      if (speed !== undefined) updateObj.speed = speed;
-
-      const rating = tr.find('.rating-select').val();
-      if (rating !== undefined) updateObj.rating = parseInt(rating, 10) || 0;
-
-      const ocr = tr.find('.ocr-quality-select').val();
-      if (ocr !== undefined) updateObj.ocr_quality = ocr;
 
       // The personal note lives on the Name cell's third line.
       if (tr.find('.notes-display, .notes-input').length) {
@@ -781,6 +881,19 @@ $(async function() {
       // so reading the first is reading the note.
       const pnote = tr.find('.pnote-icon').attr('data-pnote');
       if (pnote !== undefined) updateObj.pricing_note = pnote;
+
+      const cv = {};
+      let hasCV = false;
+      customColumns.forEach(function(c) {
+          if (c.type === 'text') {
+              const v = rowCustomTextValue(tr, c.id);
+              if (v !== undefined) { cv[c.id] = v; hasCV = true; }
+          } else {
+              const $sel = tr.find('.cc-select[data-col-id="' + c.id + '"]');
+              if ($sel.length) { cv[c.id] = $sel.val() || ''; hasCV = true; }
+          }
+      });
+      if (hasCV) updateObj.custom_values = cv;
 
       // Remove older updates for same model
       for (let i = saveQueue.length - 1; i >= 0; i--) {
@@ -825,12 +938,6 @@ $(async function() {
         var fav = parseInt(value, 10) || 0;
         setFavStar($tr.find('.fav-star'), fav);
         queueSave($tr);
-      } else if (field === 'speed') {
-        $tr.find('.speed-select').val(value || '').trigger('change');
-      } else if (field === 'ocr_quality') {
-        $tr.find('.ocr-quality-select').val(value || '').trigger('change');
-      } else if (field === 'rating') {
-        $tr.find('.rating-select').val(String(parseInt(value, 10) || 0)).trigger('change');
       } else if (field === 'notes') {
         var $td = $tr.find('td[data-col="name"]');
         var nv = value || '';
@@ -847,6 +954,30 @@ $(async function() {
       } else if (field === 'pricing_note') {
         setPnoteBadges($tr, value);
         queueSave($tr);
+      } else if (field.indexOf('custom:') === 0) {
+        // A user-defined personal column, identified by "custom:<column id>" (the
+        // generic replacement for the old hardcoded 'speed'/'rating'/'ocr_quality'
+        // field names). A dropdown restores through its own change handler, same
+        // as a manual re-select; a text column rewrites its display span directly,
+        // mirroring the 'notes' branch above.
+        var colId = field.slice(7);
+        var col = customColumnsById[colId];
+        if (!col) return;
+        if (col.type === 'text') {
+          var $ccTd = $tr.find('td[data-col="cc_' + colId + '"]');
+          var ccVal = value || '';
+          var ccDisp = ccVal ? esc(ccVal) : '<em class="notes-placeholder">' + CC_TEXT_PLACEHOLDER + '</em>';
+          var $ccInp = $ccTd.find('.cc-text-input');
+          if ($ccInp.length) {
+            $ccInp.replaceWith($('<span class="cc-text-display" data-col-id="' + colId + '"></span>').html(ccDisp));
+          } else {
+            $ccTd.find('.cc-text-display').html(ccDisp);
+          }
+          $ccTd.attr('data-dt-order', ccVal);
+          queueSave($tr);
+        } else {
+          $tr.find('.cc-select[data-col-id="' + colId + '"]').val(value || '').trigger('change');
+        }
       }
     }
 
@@ -1359,22 +1490,60 @@ $(async function() {
     queueSave(tr);
   });
 
-  $('#models').on('change', '.speed-select', function() {
-    let speeds = {'fast':1, 'avg':2, 'slow':3, '':9};
-    $(this).closest('td').attr('data-dt-order', speeds[$(this).val()] || 9);
-    const $tr = $(this).closest('tr');
-    editHistory.record($tr.attr('data-name'), 'speed', $(this).attr('data-prev') || '', $(this).val());
-    $(this).attr('data-prev', $(this).val());
+  // --- Custom columns (generic personal-column system) ---------------------
+  // Replaces the old fixed Speed/OCR/Rating dropdowns and the notes-style
+  // click-to-edit text field with one generic mechanism, driven entirely by
+  // each column's own definition (customColumnsById) rather than a hardcoded
+  // field name.
+
+  // Dropdown-type column: sort order is the option's position in the column's
+  // own list (generalizing the old fixed Speed/OCR/Rating ORDER maps) - unset
+  // always sorts last (UNSET_ORDER), whatever the option count.
+  var CC_UNSET_ORDER = 9999;
+  $('#models').on('change', '.cc-select', function() {
+    const $sel = $(this);
+    const colId = $sel.attr('data-col-id');
+    const col = customColumnsById[colId];
+    const opts = (col && col.options) || [];
+    const idx = opts.indexOf($sel.val());
+    $sel.closest('td').attr('data-dt-order', idx >= 0 ? idx + 1 : CC_UNSET_ORDER);
+    const $tr = $sel.closest('tr');
+    editHistory.record($tr.attr('data-name'), 'custom:' + colId, $sel.attr('data-prev') || '', $sel.val());
+    $sel.attr('data-prev', $sel.val());
     queueSave($tr);
   });
 
-  $('#models').on('change', '.ocr-quality-select', function() {
-    let ocrs = {'good':1, 'bad':2, '':3};
-    $(this).closest('td').attr('data-dt-order', ocrs[$(this).val()] || 3);
-    const $tr = $(this).closest('tr');
-    editHistory.record($tr.attr('data-name'), 'ocr_quality', $(this).attr('data-prev') || '', $(this).val());
-    $(this).attr('data-prev', $(this).val());
-    queueSave($tr);
+  // Text-type column: click-to-edit, modeled on the personal `notes` field
+  // (openNoteEditor above) - a display span swaps to an input on click, and
+  // commits back on blur/Enter. data-dt-order is kept in sync with the plain
+  // text on every commit, so the column sorts alphabetically (see the
+  // orderDataType wiring in dtCols above).
+  function openCcTextEditor(display) {
+    const $display = $(display);
+    const colId = $display.attr('data-col-id');
+    let currentText = $display.text().trim();
+    if (currentText === CC_TEXT_PLACEHOLDER) currentText = '';
+    const $inp = $('<input type="text" class="cc-text-input" data-col-id="' + colId + '">').val(currentText);
+    $inp.attr('data-orig', currentText);
+    $display.replaceWith($inp);
+    $inp.focus();
+  }
+  $('#models').on('click', '.cc-text-display', function() { openCcTextEditor(this); });
+  $('#models').on('blur keydown', '.cc-text-input', function(e) {
+    if (e.type === 'keydown' && e.key !== 'Enter') return;
+    if (e.type === 'keydown') e.preventDefault();
+    if (this._ccCommitting) return;
+    this._ccCommitting = true;
+    const $inp = $(this);
+    const colId = $inp.attr('data-col-id');
+    const val = $inp.val();
+    const orig = $inp.attr('data-orig') || '';
+    const disp = val ? esc(val) : '<em class="notes-placeholder">' + CC_TEXT_PLACEHOLDER + '</em>';
+    const tr = $inp.closest('tr');
+    $inp.closest('td').attr('data-dt-order', val || '');
+    $inp.replaceWith($('<span class="cc-text-display" data-col-id="' + colId + '"></span>').html(disp));
+    editHistory.record(tr.attr('data-name'), 'custom:' + colId, orig, val);
+    queueSave(tr);
   });
 
   // --- Pricing-note badge: hover preview + click-to-edit pinned modal --------
@@ -1449,14 +1618,6 @@ $(async function() {
   $(document).on('mousedown', function() {
     if (pnoteTouchClosed) { pnoteTouchClosed = false; return; }
     if ($pnoteModal.is(':visible')) closePnoteModal(true);
-  });
-
-  $('#models').on('change', '.rating-select', function() {
-    $(this).closest('td').attr('data-dt-order', parseInt($(this).val(), 10) || 0);
-    const $tr = $(this).closest('tr');
-    editHistory.record($tr.attr('data-name'), 'rating', $(this).attr('data-prev') || '0', $(this).val());
-    $(this).attr('data-prev', $(this).val());
-    queueSave($tr);
   });
 
   // The model name opens the Details modal (its JSON rides in data-json). Openable
@@ -1563,6 +1724,86 @@ $(async function() {
     saveFilters();
   });
 
+  // --- Custom columns management dialog -------------------------------------
+  // Create or delete a user-defined personal column. Reuses the Colors panel's
+  // modal look (#color-modal-content etc. via shared classes). Both creating
+  // and deleting change the table's column SET, so - exactly like a column
+  // reorder (see reorderColumns above) - the simplest fully-consistent way to
+  // apply the change is to persist it server-side and reload; there is no
+  // partial-rebuild path for adding/removing a whole column.
+  function buildCcManageTable() {
+    var $tb = $('#cc-manage-table tbody').empty();
+    customColumns.forEach(function(c) {
+      var typeLabel = c.type === 'text' ? 'Text'
+        : (c.type === 'dropdown_number' ? 'Dropdown (numbers)' : 'Dropdown (text)');
+      var $row = $('<tr></tr>');
+      $row.append($('<td></td>').text(c.name));
+      $row.append($('<td></td>').text(typeLabel));
+      var $del = $('<button type="button" class="btn-clear cc-delete-btn">Delete</button>')
+        .attr('data-id', c.id).attr('data-name', c.name);
+      $row.append($('<td></td>').append($del));
+      $tb.append($row);
+    });
+  }
+  $('#cc-manage-btn').on('click', function() {
+    buildCcManageTable();
+    $('#cc-new-name').val('');
+    $('#cc-new-type').val('text');
+    $('#cc-new-options').val('').hide();
+    $('#cc-new-status').text('');
+    $('#cc-manage-modal').css('display', 'flex');
+  });
+  $('#cc-manage-close, #cc-manage-modal').on('click', function(e) {
+    if (e.target === this) $('#cc-manage-modal').css('display', 'none');
+  });
+  // The value textarea only makes sense for a dropdown type.
+  $('#cc-new-type').on('change', function() {
+    $('#cc-new-options').toggle($(this).val() !== 'text');
+  });
+  $('#cc-manage-table').on('click', '.cc-delete-btn', function() {
+    var id = $(this).attr('data-id');
+    var name = $(this).attr('data-name');
+    if (!confirm('Delete the "' + name + '" column?\n\nThis permanently erases every model\'s stored value for it. This cannot be undone.')) return;
+    fetch('/api/custom-columns?id=' + encodeURIComponent(id), { method: 'DELETE' })
+      .then(function(r) { if (!r.ok) throw new Error('status ' + r.status); return r.json(); })
+      .then(function() {
+        statusText('Column deleted - reloading...');
+        setTimeout(function() { location.reload(); }, 400);
+      })
+      .catch(function(e) {
+        $('#cc-new-status').text('Delete failed: ' + (e.message || e));
+      });
+  });
+  $('#cc-new-create').on('click', function() {
+    var name = $('#cc-new-name').val().trim();
+    var type = $('#cc-new-type').val();
+    if (!name) { $('#cc-new-status').text('Name is required.'); return; }
+    var options = [];
+    if (type !== 'text') {
+      options = $('#cc-new-options').val().split('\n').map(function(s) { return s.trim(); }).filter(function(s) { return s !== ''; });
+      if (!options.length) { $('#cc-new-status').text('Enter at least one value, one per line.'); return; }
+    }
+    $('#cc-new-status').text('Adding...');
+    fetch('/api/custom-columns', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, type: type, options: options })
+    })
+      // A failure response body is plain text (http.Error), not JSON - read it
+      // as text rather than assuming JSON, so a validation message ("a dropdown
+      // column needs at least one value") reaches the user instead of being
+      // swallowed by a JSON-parse error.
+      .then(function(r) {
+        if (r.ok) return null;
+        return r.text().then(function(txt) { throw new Error(txt || ('status ' + r.status)); });
+      })
+      .then(function() {
+        statusText('Column added - reloading...');
+        setTimeout(function() { location.reload(); }, 400);
+      })
+      .catch(function(e) { $('#cc-new-status').text('Failed: ' + (e.message || e)); });
+  });
+
   // --- Paths info dialog ---------------------------------------------------
   // Shows where this running instance keeps its data/config/cache files. Fetched
   // from GET /api/paths (read-only).
@@ -1612,6 +1853,22 @@ function rowNoteText($tr) {
     if ($input.length) return $input.val() || '';
     const text = $tr.find('.notes-display').text();
     return text === NOTES_PLACEHOLDER ? '' : text;
+}
+
+// The same click-to-edit-display pattern as rowNoteText/NOTES_PLACEHOLDER above,
+// generalized to a text-type custom column's cell (identified by its column id,
+// since there can be any number of them): reads the open input if the cell is
+// mid-edit, otherwise the display span's text. Returns undefined when the
+// column's cell is not in the DOM at all (its table column is hidden), so
+// queueSave can omit it exactly like every other field.
+const CC_TEXT_PLACEHOLDER = 'Click to add...';
+function rowCustomTextValue($tr, colId) {
+    const $input = $tr.find('.cc-text-input[data-col-id="' + colId + '"]');
+    if ($input.length) return $input.val() || '';
+    const $display = $tr.find('.cc-text-display[data-col-id="' + colId + '"]');
+    if (!$display.length) return undefined;
+    const text = $display.text();
+    return text === CC_TEXT_PLACEHOLDER ? '' : text;
 }
 
 // Set the favourite star to an exact state. The star lives at the end of the Name
@@ -1718,10 +1975,15 @@ const PNOTE_ICON = '<svg class="pnote-ico" viewBox="0 0 24 24" aria-hidden="true
 // note-to-add. Drawn in currentColor so it themes and inherits the badge colour.
 const PNOTE_ADD_ICON = '<svg class="pnote-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6"/><path d="M14 3v5h5"/><path d="M9 12h4"/><path d="M18 15v6"/><path d="M15 18h6"/></svg>';
 
-function renderCell(model, col, label) {
-    let val = model[col];
+function renderCell(model, c) {
+    let col = c.target;
+    let label = c.title;
+    // A custom column's value does not live directly on the row under its own
+    // key (there could be any number of them); it rides in the row's
+    // custom_values map, keyed by the column's id.
+    let val = c.custom ? (model.custom_values || {})[c.custom.id] : model[col];
     if (val == null) val = "";
-    
+
     let inner = "";
     let dataOrder = "";
     let tdClass = "";
@@ -1790,44 +2052,35 @@ function renderCell(model, col, label) {
     } else if (col === 'created_at') {
         inner = val ? String(val).split('T')[0] : "";
         tdClass = "nowrap";
-    } else if (col === 'speed') {
-        let opts = [];
-        let ORDER = {'fast':1, 'avg':2, 'slow':3, '':9};
-        dataOrder = ORDER[val] || 9;
-        let OPTS_MAP = ['', 'fast', 'avg', 'slow'];
-        for (let o of OPTS_MAP) {
-            let selected = (o === val) ? ' selected' : '';
-            let label = o !== '' ? o : '—';
-            opts.push(`<option value="${esc(o)}"${selected}>${label}</option>`);
+    } else if (c.custom) {
+        // Generic custom-column rendering (the replacement for the old hardcoded
+        // Speed/Rating/OCR cells): a dropdown type renders a <select> of the
+        // column's own options (unset shows an em dash), sorting by the option's
+        // position - generalizing the old fixed ORDER maps, with unset always
+        // sorting last regardless of how many options the column has. A text type
+        // renders a click-to-edit cell (see openCcTextEditor), sorting
+        // alphabetically on the raw string. No coloring on any custom column, per
+        // this feature's scope - unlike the old Rating dropdown, its options carry
+        // no .ropt-* colour classes.
+        let colId = c.custom.id;
+        if (c.custom.type === 'text') {
+            dataOrder = val;
+            let disp = val ? esc(val) : '<em class="notes-placeholder">' + 'Click to add...' + '</em>';
+            inner = `<span class="cc-text-display" data-col-id="${colId}">${disp}</span>`;
+        } else {
+            let opts = c.custom.options || [];
+            let idx = opts.indexOf(val);
+            dataOrder = idx >= 0 ? idx + 1 : 9999;
+            let optsHtml = [`<option value=""${val ? '' : ' selected'}>—</option>`];
+            for (let o of opts) {
+                let selected = (o === val) ? ' selected' : '';
+                optsHtml.push(`<option value="${esc(o)}"${selected}>${esc(o)}</option>`);
+            }
+            // data-prev holds the last committed value so an edit can record the
+            // old value for undo without relying on a focus event firing first.
+            inner = `<select class="cc-select" data-col-id="${colId}" data-prev="${esc(val)}">${optsHtml.join('')}</select>`;
         }
-        // data-prev holds the last committed value so an edit can record the old
-        // value for undo without relying on a focus event firing first.
-        inner = `<select class="speed-select" data-prev="${esc(val)}">${opts.join('')}</select>`;
-    } else if (col === 'rating') {
-        // Same inline-edit dropdown as Speed/OCR. Option rows keep the 0-4
-        // red-to-green scale colours (.ropt-*) as a cue when the menu is open;
-        // value 0 shows an em-dash (unset). Sorts numerically via data-dt-order.
-        let rating_val = parseInt(val) || 0;
-        if (!(rating_val >= 0 && rating_val <= 4)) rating_val = 0;
-        dataOrder = rating_val;
-        let LABELS = ['—', '1', '2', '3', '4'];
-        let opts = [];
-        for (let i = 0; i <= 4; i++) {
-            let selected = (i === rating_val) ? ' selected' : '';
-            opts.push(`<option value="${i}"${selected} class="ropt-${i}">${LABELS[i]}</option>`);
-        }
-        inner = `<select class="rating-select" data-prev="${rating_val}">${opts.join('')}</select>`;
-    } else if (col === 'ocr_quality') {
-        let opts = [];
-        let ORDER = {'good':1, 'bad':2, '':3};
-        dataOrder = ORDER[val] || 3;
-        let OPTS_MAP = ['', 'good', 'bad'];
-        for (let o of OPTS_MAP) {
-            let selected = (o === val) ? ' selected' : '';
-            let label = o !== '' ? o : '—';
-            opts.push(`<option value="${esc(o)}"${selected}>${label}</option>`);
-        }
-        inner = `<select class="ocr-quality-select" data-prev="${esc(val)}">${opts.join('')}</select>`;
+        tdClass = 'cc-cell';
     } else if (col === 'disk_size_gb') {
         // Native-precision on-disk weight size in GB (curated), rounded up to a
         // whole number; the unit lives in the "Size (GB)" header. Blank when

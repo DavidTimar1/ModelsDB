@@ -80,7 +80,7 @@ func TestUpsertAPIModelInsertAndPreserveCurated(t *testing.T) {
 
 	// Lay down curated values, then re-upsert with changed metadata: the curated
 	// columns must survive while metadata refreshes.
-	if err := store.UpdateCurated("OpenAI: GPT-5", map[string]interface{}{"rating": float64(5), "notes": "great"}); err != nil {
+	if err := store.UpdateCurated("OpenAI: GPT-5", map[string]interface{}{"tool": "yes", "notes": "great"}); err != nil {
 		t.Fatalf("updateCurated: %v", err)
 	}
 	norm2 := catalog.NormalizeModel(map[string]interface{}{
@@ -94,8 +94,8 @@ func TestUpsertAPIModelInsertAndPreserveCurated(t *testing.T) {
 	if got := colStr(t, "OpenAI: GPT-5", "description"); got != "second" {
 		t.Errorf("description should refresh on re-upsert, got %q", got)
 	}
-	if got := colInt(t, "OpenAI: GPT-5", "rating"); got != 5 {
-		t.Errorf("curated rating must survive re-upsert, got %d", got)
+	if got := colStr(t, "OpenAI: GPT-5", "tool"); got != "yes" {
+		t.Errorf("curated tool must survive re-upsert, got %q", got)
 	}
 	if got := colStr(t, "OpenAI: GPT-5", "notes"); got != "great" {
 		t.Errorf("curated notes must survive re-upsert, got %q", got)
@@ -154,15 +154,15 @@ func TestSetPricingPreservesUnitOnEmpty(t *testing.T) {
 
 func TestSaveCuratedPreservesOmittedFields(t *testing.T) {
 	migratedDB(t)
-	if err := store.UpdateCurated("M", map[string]interface{}{"notes": "keep me", "rating": float64(3)}); err != nil {
+	if err := store.UpdateCurated("M", map[string]interface{}{"notes": "keep me", "tool": "no"}); err != nil {
 		t.Fatal(err)
 	}
-	// Save only a new rating; notes must be preserved (read-modify-write merge).
-	if err := store.SaveCurated("M", map[string]interface{}{"rating": float64(5)}); err != nil {
+	// Save only a new tool value; notes must be preserved (read-modify-write merge).
+	if err := store.SaveCurated("M", map[string]interface{}{"tool": "yes"}); err != nil {
 		t.Fatalf("saveCurated: %v", err)
 	}
-	if got := colInt(t, "M", "rating"); got != 5 {
-		t.Errorf("rating = %d, want 5", got)
+	if got := colStr(t, "M", "tool"); got != "yes" {
+		t.Errorf("tool = %q, want yes", got)
 	}
 	if got := colStr(t, "M", "notes"); got != "keep me" {
 		t.Errorf("omitted notes must be preserved, got %q", got)

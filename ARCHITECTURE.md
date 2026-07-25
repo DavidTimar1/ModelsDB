@@ -4,7 +4,7 @@ ModelsDB's design and internals. For setup, usage, and the query API, see [READM
 
 ## Overview
 
-All model data lives in a single **SQLite** database (`data/modelsdb.db`). Each model exists once, keyed by `name`. One row holds everything: OpenRouter metadata, HuggingFace/collection metadata, derived capabilities, and your curated fields. The OpenRouter refresh updates the metadata columns. It never clobbers curated fields or collection-derived capabilities.
+All model data lives in a single **SQLite** database (`data/modelsdb.db`). Each model exists once, keyed by `name`. One row on the `models` table holds everything about the model itself: OpenRouter metadata, HuggingFace/collection metadata, derived capabilities, and your curated fields. The OpenRouter refresh updates the metadata columns. It never clobbers curated fields or collection-derived capabilities. Alongside `models`, a side-table trio holds your **custom columns** - personal columns you define yourself (see [Custom columns](#custom-columns) below) - since their per-model values are sparse (most models have no value for most columns) and their count is open-ended, unlike the fixed columns on `models`.
 
 ## Backend (Go)
 
@@ -63,7 +63,7 @@ All server output is written to `<cache>/logs/modelsdb.log`, in addition to the 
 
 ### One source of truth, one public export
 
-The binary `modelsdb.db` is the **single source of truth for ALL model data, objective AND personal** (`notes, speed, rating, favorite, ocr_quality`). It is git-ignored, because it is binary and it holds your personal data.
+The binary `modelsdb.db` is the **single source of truth for ALL model data, objective AND personal** (`notes, favorite`, plus every value in your custom columns - see [Custom columns](#custom-columns)). It is git-ignored, because it is binary and it holds your personal data.
 
 On a save or refresh the app exports ONE file, `curated.json` (git-**tracked**). The app never runs git itself, so committing it is up to you. This file holds the OBJECTIVE subset, wrapped in a small schema header (`{schema_version, min_app_version, models:[...]}`). The subset is the objective curated facts (`tool, moe, parameters, active_parameters, disk_size_gb, measurement, pricing_note`) plus the identity/metadata of non-API models. It is the portable public catalog that a fresh clone rebuilds an EMPTY DB from. An older binary refuses to import a catalog whose `min_app_version` exceeds its build.
 
@@ -155,9 +155,32 @@ The DB column groups, on the single `models` table:
 - **ZDR (Zero Data Retention)** `zdr`: a boolean that mirrors OpenRouter's website "Zero Data Retention" filter. A model is `zdr = true` if ANY of its serving providers keeps no prompts (`dataPolicy.retainsPrompts == false`). Non-OpenRouter models (`huggingface` / `collection` / `manual`) are always `zdr = true` by rule. See [ZDR derivation](#zdr-derivation) below.
 - **Curated** (never auto-overwritten), split by where it is exported:
   - *Objective* (public, in `curated.json`): `tool, moe, parameters, active_parameters, disk_size_gb, measurement, pricing_note`. `disk_size_gb` is the total size in GB of the model's native-precision weight files (safetensors / `.bin`) on the canonical HuggingFace repo's main revision (excludes quantized/GGUF mirrors and non-weight files); the UI shows it (rounded up to a whole number) in the read-only "Size (GB)" column. `measurement` is the pricing unit for the In/Out $ columns (e.g. `per 1M tokens`, `per second`, `per image`) and is filterable in the UI. `pricing_note` records objective pricing caveats (extra SKUs the In/Out columns omit).
-  - *Personal* (private, stored ONLY in the DB and never exported to any file): `notes, speed, rating, favorite, ocr_quality`.
+  - *Personal* (private, stored ONLY in the DB and never exported to any file): the fixed fields `notes, favorite`, plus every value in your [custom columns](#custom-columns).
 
 `source` is `openrouter` (from the API), `huggingface` (manual HF records), or `collection` (models discovered on collection pages that the API omits).
+
+## Custom columns
+
+Beyond the fixed columns on `models`, you can define your own personal columns from the UI - a plain text field, or a single-select dropdown of text or number labels - without any code change. A fresh install already has three: **Speed** (fast/avg/slow), **Rating** (1-4), and **OCR** (good/bad), which used to be hardcoded fixed columns and are now just the first three rows of this generic system (an existing install's live values were migrated into them - see "Custom-column migration" below).
+
+**Schema** (`internal/dbcore/db.go`'s `schemaSQL`, mirrored for existing installs by the migration in `internal/dbcore/migrate.go`):
+
+- `custom_columns(id, name UNIQUE, type CHECK IN ('text', 'dropdown_text', 'dropdown_number'), created_at)` - one row per column definition. `type` is one of the three predefined kinds (see `internal/store/custom_columns.go`'s `ColumnTypeText`/`ColumnTypeDropdownText`/`ColumnTypeDropdownNumber`); there is no open/arbitrary type system and no multi-select.
+- `custom_column_options(column_id, position, value)` - a dropdown column's allowed values, in the order you entered them (one per line in the UI's create form; that line order is fixed at creation, since there is no separate reorder control). Empty for a text column.
+- `custom_values(column_id, model_name, value)` - one model's value for one column. **Sparse storage**: a model with no value for a column simply has no row here (never a stored empty string), so "unset" costs nothing.
+
+All three cascade-delete (`ON DELETE CASCADE`) from `custom_columns`, so deleting a column definition wipes its option list and every model's stored value for it in one statement - enforced by SQLite itself, not by application code. The UI shows a clear warning before a delete, since this data has no other backup than the DB file.
+
+**Personal-only by construction.** `CuratedBytes` (what every export path - `ExportCuratedJSON`, the `export` CLI, `ExportMissing` - ultimately builds from) is built purely from `dbcore.GetAllModels()` plus a fixed set of named fields; it has no code path that ever queries `custom_columns`/`custom_column_options`/`custom_values`, so there is nothing to remember to exclude. This is a stronger guarantee than the fixed personal fields (`notes`, `favorite`), which live as columns ON `models` and are excluded only by the export code naming just the objective columns it wants. Regression test: `TestCustomColumnDataStaysInDBNeverExported` (`internal/app/custom_columns_test.go`).
+
+**HTTP surface** (`internal/app/handlers.go`): `GET/POST/DELETE /api/custom-columns` lists, creates, and deletes column definitions; `?id=<id>` selects one for `DELETE`. There is no separate save endpoint for per-model values - `GET /api/models` embeds each model's values as a `custom_values` object (`{"<column id>": "<value>"}`) alongside its other fields, and `POST /api/save` accepts an optional `custom_values` object on any batch item, applied via `store.SetCustomValue` right alongside the fixed curated fields - so the existing autosave/retry/debounce machinery covers custom columns with no second save pipeline.
+
+**Custom-column migration** (`schemaVersion` 3 -> 4 -> 5, `internal/dbcore/migrate.go`): this is an **expand -> migrate -> contract** sequence, since it moves real, unrecoverable personal data (every existing install's live Speed/Rating/OCR-style values) from fixed columns to the new system:
+
+1. **v4 (migrate)** creates the three tables above and unconditionally creates the "Speed"/"Rating"/"OCR" column definitions (even on a brand-new empty DB, so a fresh install's out-of-box experience is unchanged), then copies every model's non-unset legacy `models.speed`/`rating`/`ocr_quality` value into a matching `custom_values` row. The legacy columns are deliberately left in place for this one step, so the migration itself has something to read them from.
+2. **v5 (contract)** drops the legacy `models.speed`/`rating`/`ocr_quality` columns (`ALTER TABLE ... DROP COLUMN`, idempotent), now that every consumer (`SaveCurated`, the `/api/save` handler, the UI) reads and writes exclusively through the generic system.
+
+Both steps run inside the same transactional, backed-up, integrity-checked migration path every schema change uses (see "Schema migrations and backups" above) - no new failure mode.
 
 ## Directory structure
 
@@ -202,7 +225,8 @@ ModelsDB/
 │   │   └── migrate.go     # PRAGMA user_version migrations, pre-migration backup/restore/integrity
 │   ├── store/             # Data layer (imports paths, shared, dbcore)
 │   │   ├── store.go       # Upserts, curated updates, capability enrichment, export
-│   │   └── seed.go        # Seeds an empty DB from curated.json or the embedded catalog (+ min-version gate)
+│   │   ├── seed.go        # Seeds an empty DB from curated.json or the embedded catalog (+ min-version gate)
+│   │   └── custom_columns.go # User-defined personal columns: CRUD + per-model values (see Custom columns)
 │   ├── catalog/           # Upstream-schema knowledge (imports paths, shared, dbcore, store)
 │   │   ├── update.go      # OpenRouter fetch + NormalizeModel + upsert
 │   │   ├── collections.go # Scrape OpenRouter collections; enrich + add missing models
@@ -227,7 +251,7 @@ ModelsDB/
 │       ├── pathinstall_unix.go    # symlink into ~/.local/bin; shell-rc PATH edit
 │       ├── pathinstall_windows.go # per-user PATH via registry (HKCU\Environment)
 │       ├── server.go      # HTTP server, routes, embedded assets, bindAddrs, StartServer
-│       ├── handlers.go    # /api/models, /api/save, /api/settings, /api/health, /api/update[/status], /api/update-check, /api/app-update/*
+│       ├── handlers.go    # /api/models, /api/save, /api/custom-columns, /api/settings, /api/health, /api/update[/status], /api/update-check, /api/app-update/*
 │       ├── query.go       # Query/filter API + the /api markdown usage guide
 │       ├── process.go     # Build the display rows from the DB
 │       ├── refresh.go     # On-demand full-refresh controller (single-flight guard + status)

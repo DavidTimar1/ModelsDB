@@ -28,13 +28,14 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
 
 // schemaVersion is the schema this build expects. Bump it by ONE and append a
 // matching migration to the registry for every schema change.
-const schemaVersion = 3
+const schemaVersion = 5
 
 type migration struct {
 	version int // target user_version after this migration
@@ -54,6 +55,22 @@ var migrations = []migration{
 	// v3: add the curated `disk_size_gb` column (native-precision on-disk model
 	// size in GB). Idempotent - fresh DBs already have the column from schemaSQL.
 	{version: 3, apply: addDiskSizeColumn},
+	// v4: add the generic custom-column tables (custom_columns,
+	// custom_column_options, custom_values - idempotent, fresh DBs already have
+	// them from schemaSQL) and carry every model's existing speed/rating/
+	// ocr_quality value into three custom-column definitions ("Speed", "Rating",
+	// "OCR"), so no user's live personal data is lost when the app moves from
+	// fixed personal columns to user-defined ones. The old models.speed/rating/
+	// ocr_quality columns are left in place for this one step (v5, next, drops
+	// them) so the migration itself has something to read the legacy values from.
+	{version: 4, apply: addCustomColumnsAndMigratePersonalFields},
+	// v5: drop the legacy models.speed/rating/ocr_quality columns. Every
+	// consumer (SaveCurated, UpdateCurated, ImportFullRecord, the /api/save
+	// handler, the UI) now reads and writes Speed/Rating/OCR-style personal
+	// values exclusively through the generic custom-column system, so these
+	// columns are dead weight - this is the contract step of the v4 migration's
+	// expand/migrate/contract sequence.
+	{version: 5, apply: dropLegacyPersonalColumns},
 }
 
 func currentSchemaVersion() (int, error) {
@@ -231,6 +248,166 @@ func addDiskSizeColumn(tx *sql.Tx) error {
 	}
 	_, err = tx.Exec("ALTER TABLE models ADD COLUMN disk_size_gb REAL")
 	return err
+}
+
+// addCustomColumnsAndMigratePersonalFields creates the generic custom-column
+// tables (idempotent - fresh DBs already have them from schemaSQL) and, on a DB
+// upgrading from an older version, carries every model's existing speed/rating/
+// ocr_quality value into three new custom-column definitions: "Speed"
+// (dropdown_text: fast/avg/slow), "Rating" (dropdown_number: 1-4), and "OCR"
+// (dropdown_text: good/bad) - the option sets and unset sentinels (empty string
+// for speed/ocr_quality, 0 for rating) match what the UI's inline selects
+// already accepted, so every value maps onto the new system with no loss. A
+// model with no value for one of these (still at its unset default) simply
+// gets no row in custom_values, matching the new system's sparse storage. The
+// legacy speed/rating/ocr_quality columns themselves are dropped by the very
+// next migration (v5, dropLegacyPersonalColumns) once this one has read them.
+func addCustomColumnsAndMigratePersonalFields(tx *sql.Tx) error {
+	// The three allowed `type` values (and the "dropdown_text"/"dropdown_number"
+	// literals passed to ensureCustomColumn below) mirror store.ColumnTypeText/
+	// ColumnTypeDropdownText/ColumnTypeDropdownNumber; change both together.
+	for _, ddl := range []string{
+		`CREATE TABLE IF NOT EXISTS custom_columns (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			name       TEXT    NOT NULL UNIQUE,
+			type       TEXT    NOT NULL CHECK (type IN ('text', 'dropdown_text', 'dropdown_number')),
+			created_at TEXT    NOT NULL DEFAULT ''
+		)`,
+		`CREATE TABLE IF NOT EXISTS custom_column_options (
+			column_id INTEGER NOT NULL REFERENCES custom_columns(id) ON DELETE CASCADE,
+			position  INTEGER NOT NULL,
+			value     TEXT    NOT NULL,
+			PRIMARY KEY (column_id, position)
+		)`,
+		`CREATE TABLE IF NOT EXISTS custom_values (
+			column_id  INTEGER NOT NULL REFERENCES custom_columns(id) ON DELETE CASCADE,
+			model_name TEXT    NOT NULL REFERENCES models(name) ON DELETE CASCADE,
+			value      TEXT    NOT NULL DEFAULT '',
+			PRIMARY KEY (column_id, model_name)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_custom_values_model ON custom_values(model_name)`,
+	} {
+		if _, err := tx.Exec(ddl); err != nil {
+			return fmt.Errorf("create custom-column schema: %w", err)
+		}
+	}
+
+	speedID, err := ensureCustomColumn(tx, "Speed", "dropdown_text", []string{"fast", "avg", "slow"})
+	if err != nil {
+		return fmt.Errorf("create Speed custom column: %w", err)
+	}
+	ratingID, err := ensureCustomColumn(tx, "Rating", "dropdown_number", []string{"1", "2", "3", "4"})
+	if err != nil {
+		return fmt.Errorf("create Rating custom column: %w", err)
+	}
+	ocrID, err := ensureCustomColumn(tx, "OCR", "dropdown_text", []string{"good", "bad"})
+	if err != nil {
+		return fmt.Errorf("create OCR custom column: %w", err)
+	}
+
+	rows, err := tx.Query("SELECT name, speed, rating, ocr_quality FROM models")
+	if err != nil {
+		return fmt.Errorf("read legacy personal columns: %w", err)
+	}
+	type legacyRow struct {
+		name, speed, ocr string
+		rating           int64
+	}
+	var legacy []legacyRow
+	for rows.Next() {
+		var r legacyRow
+		if err := rows.Scan(&r.name, &r.speed, &r.rating, &r.ocr); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan legacy personal columns: %w", err)
+		}
+		legacy = append(legacy, r)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	for _, r := range legacy {
+		if v := strings.TrimSpace(r.speed); v != "" {
+			if err := setCustomValueInTx(tx, speedID, r.name, v); err != nil {
+				return fmt.Errorf("carry speed for %q: %w", r.name, err)
+			}
+		}
+		if r.rating >= 1 && r.rating <= 4 {
+			if err := setCustomValueInTx(tx, ratingID, r.name, strconv.FormatInt(r.rating, 10)); err != nil {
+				return fmt.Errorf("carry rating for %q: %w", r.name, err)
+			}
+		}
+		if v := strings.TrimSpace(r.ocr); v != "" {
+			if err := setCustomValueInTx(tx, ocrID, r.name, v); err != nil {
+				return fmt.Errorf("carry ocr_quality for %q: %w", r.name, err)
+			}
+		}
+	}
+	return nil
+}
+
+// ensureCustomColumn returns the id of the named custom column, creating it
+// (with its ordered dropdown options) if it does not already exist. Idempotent,
+// like the rest of this migration - safe if ever re-run against a DB that
+// already has the column.
+func ensureCustomColumn(tx *sql.Tx, name, colType string, options []string) (int64, error) {
+	var id int64
+	err := tx.QueryRow("SELECT id FROM custom_columns WHERE name=?", name).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if err != sql.ErrNoRows {
+		return 0, err
+	}
+	res, err := tx.Exec("INSERT INTO custom_columns (name, type, created_at) VALUES (?,?,?)", name, colType, NowStamp())
+	if err != nil {
+		return 0, err
+	}
+	id, err = res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	for i, opt := range options {
+		if _, err := tx.Exec("INSERT INTO custom_column_options (column_id, position, value) VALUES (?,?,?)", id, i, opt); err != nil {
+			return 0, err
+		}
+	}
+	return id, nil
+}
+
+// setCustomValueInTx upserts one model's value for one custom column within a
+// migration transaction (the store-package equivalent, store.SetCustomValue,
+// runs on the plain *sql.DB and is not usable inside a *sql.Tx).
+func setCustomValueInTx(tx *sql.Tx, columnID int64, modelName, value string) error {
+	_, err := tx.Exec(`INSERT INTO custom_values (column_id, model_name, value) VALUES (?,?,?)
+		ON CONFLICT(column_id, model_name) DO UPDATE SET value=excluded.value`, columnID, modelName, value)
+	return err
+}
+
+// dropLegacyPersonalColumns removes the legacy models.speed/rating/ocr_quality
+// columns now that every value they held has already been carried into the
+// custom-column system (by the v4 migration, which runs immediately before this
+// one) and every code path reads/writes personal Speed/Rating/OCR-style data
+// through that system instead. Idempotent - checks each column exists first
+// (via columnExists), so re-running this against a DB that already lacks them
+// (or a fresh DB, whose schemaSQL-created columns v4 has already emptied into
+// custom_values by the time this runs) is a no-op.
+func dropLegacyPersonalColumns(tx *sql.Tx) error {
+	for _, col := range []string{"speed", "rating", "ocr_quality"} {
+		has, err := columnExists(tx, col)
+		if err != nil {
+			return err
+		}
+		if !has {
+			continue
+		}
+		if _, err := tx.Exec(fmt.Sprintf("ALTER TABLE models DROP COLUMN %s", col)); err != nil {
+			return fmt.Errorf("drop column %s: %w", col, err)
+		}
+	}
+	return nil
 }
 
 // ---- backup / restore -------------------------------------------------------

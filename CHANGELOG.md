@@ -4,6 +4,34 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Every commit bumps the version in `VERSION` and adds a matching entry here.
 
+## [1.30.1] - 2026-07-24
+
+### Added
+- **Every custom column is now filterable.** A filter control is generated
+  automatically for each one - a dropdown offering **All** plus the column's
+  own values for a dropdown-type column, or a substring text box for a
+  text-type column - and it appears or disappears as you create or delete
+  columns. It combines with every other filter (search, year, etc.) the same
+  way they combine with each other.
+
+## [1.30.0] - 2026-07-24
+
+### Added
+- **Custom columns.** Define your own personal columns from the new **Custom
+  columns** button in the filter bar: a plain text field, or a single-select
+  dropdown of text or number labels, in whatever order you list the dropdown
+  values. Every install already starts with three - **Speed**, **Rating**, and
+  **OCR** - carrying forward any values you had already set for them. Delete a
+  column any time (with a clear warning first, since it permanently erases every
+  model's stored value for it). Like notes and favorites, custom columns are
+  always personal: stored only in your local database, never exported to
+  `curated.json` or shared across installs.
+
+### Changed
+- **Speed, Rating, and OCR are now regular custom columns**, not fixed,
+  hardcoded ones - so they can be deleted like any other, and any per-value
+  colouring on Rating's old 0-4 scale is gone (no custom column carries colour).
+
 ## [1.29.0] - 2026-07-18
 
 ### Added

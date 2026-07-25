@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -114,9 +115,126 @@ func TestHandleGetModels(t *testing.T) {
 	for _, m := range arr {
 		if shared.GetStr(m, "name") == "Test HF" {
 			found = true
+			cv, ok := m["custom_values"].(map[string]interface{})
+			if !ok {
+				t.Errorf("custom_values should be a JSON object, got %T", m["custom_values"])
+			} else if len(cv) != 0 {
+				t.Errorf("a model with no custom values should get an empty custom_values object, got %v", cv)
+			}
 		}
 	}
 	if !found {
 		t.Errorf("served list should include 'Test HF' (got %d models)", len(arr))
+	}
+}
+
+// TestHandleCustomColumnsCRUD exercises the HTTP surface end to end: GET lists
+// (the migration's Speed/Rating/OCR columns are already there on any migrated
+// DB), POST creates a new one, and DELETE removes it and cascades away its
+// values - mirroring what the "Custom columns" management UI drives.
+func TestHandleCustomColumnsCRUD(t *testing.T) {
+	migratedDB(t)
+
+	baseline := httptest.NewRecorder()
+	handleCustomColumns(baseline, httptest.NewRequest(http.MethodGet, "/api/custom-columns", nil))
+	if baseline.Code != http.StatusOK {
+		t.Fatalf("GET status = %d", baseline.Code)
+	}
+	var before []store.CustomColumn
+	if err := json.Unmarshal(baseline.Body.Bytes(), &before); err != nil {
+		t.Fatalf("GET body not JSON: %v", err)
+	}
+
+	createBody := `{"name":"Vendor","type":"dropdown_text","options":["acme","globex"]}`
+	create := httptest.NewRecorder()
+	handleCustomColumns(create, httptest.NewRequest(http.MethodPost, "/api/custom-columns", strings.NewReader(createBody)))
+	if create.Code != http.StatusOK {
+		t.Fatalf("POST status = %d, body=%s", create.Code, create.Body.String())
+	}
+	var created store.CustomColumn
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatalf("POST body not JSON: %v (%s)", err, create.Body.String())
+	}
+	if created.Name != "Vendor" || created.Type != store.ColumnTypeDropdownText || len(created.Options) != 2 {
+		t.Errorf("created column = %+v", created)
+	}
+
+	after := httptest.NewRecorder()
+	handleCustomColumns(after, httptest.NewRequest(http.MethodGet, "/api/custom-columns", nil))
+	var list []store.CustomColumn
+	if err := json.Unmarshal(after.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != len(before)+1 {
+		t.Fatalf("column count after create = %d, want %d", len(list), len(before)+1)
+	}
+
+	del := httptest.NewRecorder()
+	handleCustomColumns(del, httptest.NewRequest(http.MethodDelete, "/api/custom-columns?id="+strconv.FormatInt(created.ID, 10), nil))
+	if del.Code != http.StatusOK {
+		t.Fatalf("DELETE status = %d, body=%s", del.Code, del.Body.String())
+	}
+
+	final := httptest.NewRecorder()
+	handleCustomColumns(final, httptest.NewRequest(http.MethodGet, "/api/custom-columns", nil))
+	var listFinal []store.CustomColumn
+	if err := json.Unmarshal(final.Body.Bytes(), &listFinal); err != nil {
+		t.Fatal(err)
+	}
+	if len(listFinal) != len(before) {
+		t.Fatalf("column count after delete = %d, want back to %d", len(listFinal), len(before))
+	}
+
+	// A missing/invalid id is rejected, not silently accepted.
+	bad := httptest.NewRecorder()
+	handleCustomColumns(bad, httptest.NewRequest(http.MethodDelete, "/api/custom-columns", nil))
+	if bad.Code != http.StatusBadRequest {
+		t.Errorf("DELETE with no id status = %d, want 400", bad.Code)
+	}
+}
+
+// TestHandleSaveModelsCustomValues pins the /api/save extension: a batch item's
+// optional custom_values object is applied via store.SetCustomValue alongside
+// the fixed curated fields, in the same request - the whole point of folding
+// custom-column saves into the existing autosave/retry pipeline instead of
+// adding a second one.
+func TestHandleSaveModelsCustomValues(t *testing.T) {
+	migratedDB(t)
+	if err := store.ImportFullRecord(map[string]interface{}{"name": "M", "source": "manual"}, "manual", "chat"); err != nil {
+		t.Fatal(err)
+	}
+	colID, err := store.CreateCustomColumn("Tier", store.ColumnTypeDropdownText, []string{"gold", "silver"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body := `[{"name":"M","notes":"hi","custom_values":{"` + strconv.FormatInt(colID, 10) + `":"gold"}}]`
+	rec := httptest.NewRecorder()
+	handleSaveModels(rec, httptest.NewRequest(http.MethodPost, "/api/save", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	if got := colStr(t, "M", "notes"); got != "hi" {
+		t.Errorf("curated notes = %q, want hi", got)
+	}
+	v, ok, err := store.GetCustomValue("M", colID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || v != "gold" {
+		t.Errorf("custom value = %q, ok=%v, want \"gold\"", v, ok)
+	}
+
+	// Clearing (empty string) removes the stored value, same as a direct
+	// SetCustomValue call.
+	clearBody := `[{"name":"M","custom_values":{"` + strconv.FormatInt(colID, 10) + `":""}}]`
+	rec2 := httptest.NewRecorder()
+	handleSaveModels(rec2, httptest.NewRequest(http.MethodPost, "/api/save", strings.NewReader(clearBody)))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec2.Code, rec2.Body.String())
+	}
+	if _, ok, err := store.GetCustomValue("M", colID); err != nil || ok {
+		t.Errorf("value should be cleared, ok=%v err=%v", ok, err)
 	}
 }

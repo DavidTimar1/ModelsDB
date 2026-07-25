@@ -49,7 +49,7 @@ func TestPersonalDataStaysInDBNeverExported(t *testing.T) {
 	}
 	// Set personal data the way the UI save path does (writes to the DB only).
 	if err := store.SaveCurated("M", map[string]interface{}{
-		"notes": "my note", "rating": float64(4), "favorite": float64(1), "speed": "fast",
+		"notes": "my note", "favorite": float64(1),
 	}); err != nil {
 		t.Fatal(err)
 	}

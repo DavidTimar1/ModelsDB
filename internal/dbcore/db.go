@@ -16,7 +16,7 @@ import (
 var DB *sql.DB
 
 // curatedCols are user/manual fields the OpenRouter refresh must NEVER clobber.
-var curatedCols = []string{"notes", "speed", "rating", "favorite", "ocr_quality", "tool", "moe", "parameters", "active_parameters", "disk_size_gb", "measurement", "pricing_note", "unlisted"}
+var curatedCols = []string{"notes", "favorite", "tool", "moe", "parameters", "active_parameters", "disk_size_gb", "measurement", "pricing_note", "unlisted"}
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS models (
@@ -59,6 +59,41 @@ CREATE TABLE IF NOT EXISTS models (
   created_at               TEXT    DEFAULT '',  -- model creation date (from API)
   updated_at               TEXT    DEFAULT ''   -- last DB write (bookkeeping)
 );
+
+-- User-defined personal columns (the generic replacement for one-off fixed
+-- personal columns like the legacy speed/rating/ocr_quality). Always
+-- personal-only: never read by ExportCuratedJSON/CuratedBytes, so a custom
+-- column and its values never leave the DB. The three allowed type values
+-- mirror store.ColumnTypeText/ColumnTypeDropdownText/ColumnTypeDropdownNumber
+-- (internal/store/custom_columns.go) - dbcore sits below store in the import
+-- DAG, so it cannot import that constant; change both together.
+CREATE TABLE IF NOT EXISTS custom_columns (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  name       TEXT    NOT NULL UNIQUE,
+  type       TEXT    NOT NULL CHECK (type IN ('text', 'dropdown_text', 'dropdown_number')),
+  created_at TEXT    NOT NULL DEFAULT ''
+);
+
+-- The allowed value set for a dropdown column, in display order (position is
+-- the 0-based line order the user entered them in). Empty for a text column.
+CREATE TABLE IF NOT EXISTS custom_column_options (
+  column_id INTEGER NOT NULL REFERENCES custom_columns(id) ON DELETE CASCADE,
+  position  INTEGER NOT NULL,
+  value     TEXT    NOT NULL,
+  PRIMARY KEY (column_id, position)
+);
+
+-- One model's value for one custom column. A model with no value for a column
+-- simply has no row here (sparse storage), rather than a stored empty string.
+-- Deleting a column (or a model) cascades to delete its values here.
+CREATE TABLE IF NOT EXISTS custom_values (
+  column_id  INTEGER NOT NULL REFERENCES custom_columns(id) ON DELETE CASCADE,
+  model_name TEXT    NOT NULL REFERENCES models(name) ON DELETE CASCADE,
+  value      TEXT    NOT NULL DEFAULT '',
+  PRIMARY KEY (column_id, model_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_custom_values_model ON custom_values(model_name);
 `
 
 // OpenDB opens (creating if needed) the SQLite database, ensures the base

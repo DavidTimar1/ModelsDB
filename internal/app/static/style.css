@@ -378,8 +378,12 @@
     to { transform: rotate(360deg); }
   }
 
-  .notes-display { display: block; min-height: 20px; padding: 2px 4px; border-radius: 3px; cursor: pointer; }
-  .notes-display:hover { background: var(--surface-inset); }
+  /* .cc-text-display (a text-type custom column's cell) shares this same look -
+     a distinct class only so its click handler never collides with the notes
+     one - and .notes-placeholder (the empty-state italic) is fully generic and
+     reused verbatim for a custom column's own empty-state text. */
+  .notes-display, .cc-text-display { display: block; min-height: 20px; padding: 2px 4px; border-radius: 3px; cursor: pointer; }
+  .notes-display:hover, .cc-text-display:hover { background: var(--surface-inset); }
   .notes-placeholder { color: var(--text-faint); font-style: italic; }
 
   .notes-input {
@@ -455,9 +459,10 @@
   table.dataTable td.col-name, table.dataTable th.col-name {
     width: 20rem; max-width: 20rem; min-width: 16rem; white-space: normal; overflow-wrap: break-word;
   }
-  /* Speed / OCR / Rating carry only a tighter cell padding. They take no width hint:
-     each select sizes to its own content (see .speed-select below), and a column
-     width here would hold the column open wider than the control inside it. */
+  /* Every dropdown-type custom column carries only a tighter cell padding. It
+     takes no width hint: the select sizes to its own content (see .cc-select
+     below), and a column width here would hold the column open wider than the
+     control inside it. */
   table.dataTable td.col-narrow { padding: 0.2rem !important; }
   .tooltip .tooltiptext {
     visibility: hidden; width: 300px; background-color: var(--tip-bg); color: var(--tip-text);
@@ -574,6 +579,39 @@
   #color-table td.cr-swatch span { display: inline-block; width: 14px; height: 14px; border-radius: 3px; margin-right: 3px; vertical-align: middle; }
   .color-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
 
+  /* Custom-columns management dialog: same modal skeleton as the Colors panel
+     above (#color-modal etc.), reusing .color-hint for the intro line. */
+  #cc-manage-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; }
+  #cc-manage-content { background: var(--surface); color: var(--text); padding: 20px; border-radius: 8px; width: 90%; max-width: 520px; max-height: 85vh; overflow-y: auto; }
+  #cc-manage-content h3 { margin: 0 0 8px; }
+  #cc-manage-content h4 { margin: 0 0 8px; font-size: var(--fs-body); }
+  #cc-manage-close { float: right; cursor: pointer; font-size: 1.5rem; line-height: 1; }
+  #cc-manage-table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); margin-bottom: 16px; }
+  #cc-manage-table th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); color: var(--text-muted); font-weight: 600; }
+  #cc-manage-table td { padding: 4px 6px; border-bottom: 1px solid var(--border-faint); }
+  /* The new-column form: name + type on one row, the dropdown-only options
+     textarea beneath (hidden for the text type), then the Add button + status. */
+  .cc-manage-new { border-top: 1px solid var(--border); padding-top: 14px; }
+  .cc-manage-new #cc-new-name, .cc-manage-new #cc-new-type { margin-bottom: 8px; }
+  .cc-manage-new #cc-new-name { width: 100%; }
+  .cc-manage-new #cc-new-type { width: 100%; }
+  #cc-new-options {
+    width: 100%;
+    min-height: 90px;
+    resize: vertical;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: var(--fs-control);
+    font-family: inherit;
+    line-height: 1.4;
+    box-sizing: border-box;
+    background: var(--input-bg);
+    color: var(--text);
+    margin-bottom: 8px;
+  }
+  .cc-manage-new-actions { display: flex; align-items: center; gap: 10px; }
+
 /* Filter Layout */
 .filters-container {
     display: flex;
@@ -598,6 +636,13 @@
     align-items: center;
     gap: 4px;
 }
+/* The per-custom-column filter controls are generated into this wrapper at
+   runtime (see app.js buildCustomColumnFilters). display:contents makes the
+   wrapper itself invisible to layout, so its children (an <input> per text
+   column, a <label>+<select> per dropdown column) become direct flex items of
+   .filters-row exactly like every other filter control, instead of stacking
+   inside a nested block. */
+#cc-filters { display: contents; }
 .filter-input {
     padding: 4px 8px;
     border: 1px solid var(--border);
@@ -953,11 +998,15 @@ td.nowrap { white-space: nowrap; }
     white-space: nowrap;
 }
 
-/* Inline-edit dropdowns in the table (Speed, OCR, Rating - one shared look).
-   Each sizes to its own widest option (max-content) rather than to a shared fixed
-   width: their options are short words, and a fixed width held three columns open
-   wider than anything in them needed. */
-.speed-select, .ocr-quality-select, .rating-select {
+/* Inline-edit dropdown for a dropdown-type custom column (the generic
+   replacement for the old fixed Speed/OCR/Rating selects - one shared look for
+   any number of user-defined dropdown columns). Sizes to its own widest option
+   (max-content) rather than to a shared fixed width: options are short
+   words/labels, and a fixed width would hold the column open wider than
+   anything in it needs. No colour classes on the option rows - custom columns
+   carry no per-value coloring, unlike the old Rating scale (see the removed
+   .ropt-* rules this replaced). */
+.cc-select {
     border: 1px solid var(--border);
     padding: 2px;
     border-radius: 3px;
@@ -966,6 +1015,22 @@ td.nowrap { white-space: nowrap; }
     color: var(--text);
     box-sizing: border-box;
     width: max-content;
+}
+
+/* Inline-edit text field for a text-type custom column: click-to-edit,
+   sharing the notes-display look (see .notes-display below) but its own class
+   for event delegation, and a single-line input rather than a multi-line
+   textarea since a table cell is not the wide Name cell. */
+.cc-text-input {
+    width: 100%;
+    padding: 2px 5px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-size: var(--fs-control);
+    font-family: inherit;
+    display: block;
+    background: var(--input-bg);
+    color: var(--text);
 }
 
 /* In $/Out $ price pill. Only its background-color is set inline (a continuous
@@ -977,17 +1042,6 @@ td.nowrap { white-space: nowrap; }
     font-weight: 500;
     display: inline-block;
 }
-
-/* Rating dropdown option rows. The control itself shares the Speed/OCR look
-   (the .rating-select rule above); its option rows keep the 0-4 red-to-green
-   scale as a meaningful cue when the menu is open. The option text stays dark
-   in both themes so it never disappears on the lighter fills. */
-.rating-select option { color: #1e293b; }
-.ropt-0 { background: #e5e5e5; }
-.ropt-1 { background: #ef4444; }
-.ropt-2 { background: #eab308; }
-.ropt-3 { background: #84cc16; }
-.ropt-4 { background: #22c55e; }
 
 /* Colour-legend swatches in the thresholds panel. */
 .swatch-green  { background: #22c55e; }
@@ -1265,7 +1319,7 @@ td.nowrap { white-space: nowrap; }
     flex-wrap: wrap;
     align-items: stretch;
     /* Comfortable breathing room between cells (row 10px, column 14px) - the earlier
-       5x8 read cramped. Speed/OCR/Rating add more on top of this (below). */
+       5x8 read cramped. Custom columns (.cc-cell) add more on top of this (below). */
     gap: 10px 14px;
     margin: 0 0 12px;
     padding: 12px 14px;
@@ -1303,23 +1357,19 @@ td.nowrap { white-space: nowrap; }
   table.dataTable td.col-narrow, table.dataTable th.col-narrow {
     width: auto; max-width: none; min-width: 0;
   }
-  /* Zero the table's cell padding for the three control cells, keyed on data-col
-     rather than the .col-narrow class: that class is a DESKTOP width hint and is set
-     on Speed and OCR but not Rating, so keying on it left Rating alone carrying the
-     padding its neighbours had stripped - it stood 11px taller than them and its
-     select was 22px narrower, in a row that is meant to read as three matching
-     controls. In card view these three are the same thing and are styled as such. */
-  #models tbody td[data-col="speed"],
-  #models tbody td[data-col="ocr_quality"],
-  #models tbody td[data-col="rating"] { padding: 0 !important; }
-  /* Speed / OCR / Rating sit tighter together than they should - they read as one
-     clump. A horizontal margin on each adds to the card's column gap, so ADJACENT
-     controls get the general 14px gap PLUS 2x8px of margin = ~30px between them,
-     clearly more separation than the other cells without touching their padding
-     (which stays 0 so the three stay the same height). */
-  #models tbody td[data-col="speed"],
-  #models tbody td[data-col="ocr_quality"],
-  #models tbody td[data-col="rating"] { margin-inline: 8px; }
+  /* Zero the table's cell padding for every custom column's cell, keyed on the
+     shared .cc-cell class (set by renderCell for both dropdown and text custom
+     columns) rather than the .col-narrow class: that class is a DESKTOP width
+     hint set only on dropdown-type columns, so keying on it would leave a
+     text-type column carrying the padding its neighbours had stripped. In card
+     view every custom column is styled identically regardless of type. */
+  #models tbody td.cc-cell { padding: 0 !important; }
+  /* Custom columns sit tighter together than they should - they read as one
+     clump. A horizontal margin on each adds to the card's column gap, so
+     ADJACENT controls get the general 14px gap PLUS 2x8px of margin = ~30px
+     between them, clearly more separation than the other cells without
+     touching their padding (which stays 0 so they stay the same height). */
+  #models tbody td.cc-cell { margin-inline: 8px; }
 
   /* The card's title line: the Name cell alone, holding its own three lines - name
      + date, the icon row (which ends with the favourite star), and the note.
@@ -1381,13 +1431,12 @@ td.nowrap { white-space: nowrap; }
   }
 
   /* Labels: no generic per-cell label; only a few cells get a small caption
-     from their data-label. */
+     from their data-label. Every custom column gets one too (.cc-cell), so any
+     number of user-defined columns are captioned with no per-column CSS. */
   #models tbody td::before { content: none; }
   #models tbody td[data-col="input_modalities"]::before,
   #models tbody td[data-col="output_modalities"]::before,
-  #models tbody td[data-col="speed"]::before,
-  #models tbody td[data-col="ocr_quality"]::before,
-  #models tbody td[data-col="rating"]::before {
+  #models tbody td.cc-cell::before {
     content: attr(data-label) " ";
     font-size: calc(var(--fs-body) * 0.72);
     font-weight: 600;
@@ -1402,9 +1451,7 @@ td.nowrap { white-space: nowrap; }
      row - and which cell loses depends on the caption's length and the track it
      landed in, so no two cards agree. Stacked, every value starts at the same
      baseline whatever the text. */
-  #models tbody td[data-col="speed"]::before,
-  #models tbody td[data-col="ocr_quality"]::before,
-  #models tbody td[data-col="rating"]::before,
+  #models tbody td.cc-cell::before,
   #models tbody td[data-col="input_modalities"]::before,
   #models tbody td[data-col="output_modalities"]::before {
     display: block;
@@ -1412,10 +1459,10 @@ td.nowrap { white-space: nowrap; }
     letter-spacing: .04em;
     font-weight: 700;
   }
-  /* Each control then fills its cell, so all three are the same width. */
-  #models tbody td[data-col="speed"] .speed-select,
-  #models tbody td[data-col="ocr_quality"] .ocr-quality-select,
-  #models tbody td[data-col="rating"] .rating-select {
+  /* Each control then fills its cell, so every custom column control is the
+     same width regardless of type. */
+  #models tbody td.cc-cell .cc-select,
+  #models tbody td.cc-cell .cc-text-input {
     width: 100%;
     min-width: 0;
   }
@@ -1481,14 +1528,11 @@ td.nowrap { white-space: nowrap; }
      single Params cell rather than wrapping it. */
   #models tbody td[data-col="parameters"] { white-space: nowrap; }
 
-  /* Collapse absent cells (a missing size) so cards stay compact. Speed/OCR keep a
-     select (never :empty) and show an em-dash unset. */
+  /* Collapse absent cells (a missing size) so cards stay compact. Every custom
+     column cell always keeps a child element - a select showing an em-dash
+     unset (dropdown type) or a display span showing a placeholder (text type,
+     same as .notes-display) - so neither is ever :empty and neither collapses. */
   #models tbody td:empty { display: none; }
-
-  /* Editors keep a comfortable tap size. */
-  #models tbody td .speed-select,
-  #models tbody td .ocr-quality-select,
-  #models tbody td .rating-select { width: auto; min-width: 90px; }
 
   /* --- Pricing-note icon on a card. There is no hover on touch, so it is visible at
      rest and tappable - a tap opens the same #pnote-modal the desktop click opens. It

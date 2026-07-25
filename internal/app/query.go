@@ -141,6 +141,7 @@ Base URL: http://127.0.0.1:8122   (default loopback bind; no auth - a non-loopba
 - GET /api/models             (no query string) -> this guide
 - GET /api                    -> this guide
 - GET /api/health             -> {"status":"ok","port":...}
+- GET /api/custom-columns     -> JSON array of user-defined column definitions ({id,name,type,options,created_at})
 - POST /api/update            -> start a full refresh (catalog,collections,pricing) in the background; 202 {"started":true}, or 409 {"started":false,"running":true} if one is already running
 - GET /api/update/status      -> {"running":bool,"phase":"idle|catalog|collections|pricing","started_at":...,"finished_at":...,"errors":[...]}
 
@@ -184,9 +185,13 @@ model_type values: chat, image, video, embedding, rerank, tts, stt
 - completion        : OUTPUT price, RAW USD PER TOKEN (string)
 - price_display     : human pricing summary (see the pricing note below)
 - notes             : curated notes (often the pricing-unit caveat)
-- rating, favorite, speed, moe, parameters, active_parameters, disk_size_gb : curated fields
+- favorite, moe, parameters, active_parameters, disk_size_gb : curated fields
 - disk_size_gb       : native-precision on-disk size in GB (safetensors/.bin
                       weights on the canonical HuggingFace repo; null when unset)
+- custom_values      : personal, user-defined column values for this model, as
+                      {"<column id>": "<value>"}. See GET /api/custom-columns
+                      for the column definitions (name/type/options). Personal
+                      and per-install - not meaningful across machines.
 
 ## IMPORTANT - pricing units
 

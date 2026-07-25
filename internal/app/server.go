@@ -178,6 +178,7 @@ func StartServer() {
 	http.HandleFunc("/api", handleAPIGuide)
 	http.HandleFunc("/api/models", handleGetModels)
 	http.HandleFunc("/api/save", handleSaveModels)
+	http.HandleFunc("/api/custom-columns", handleCustomColumns)
 	http.HandleFunc("/api/settings", handleSettings)
 	http.HandleFunc("/api/health", handleHealth)
 	http.HandleFunc("/api/paths", handlePaths)

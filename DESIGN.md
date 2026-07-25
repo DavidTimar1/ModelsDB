@@ -20,8 +20,8 @@ properties on `:root` so nothing hard-codes a `rem`/`px` text size.
 - **Three size roles**, each a plain multiple of the root font size:
   - `--fs-title` (`1.7rem`) - the `h1` only.
   - `--fs-control` (`0.95rem`) - every button and every input/select (filter
-    controls, the inline Speed/OCR/Rating selects, the note textareas, the
-    DataTables page-length select, etc.).
+    controls, the inline custom-column dropdowns/text inputs, the note textareas,
+    the DataTables page-length select, etc.).
   - `--fs-body` (`1rem`) - everything else: table cells, card text, the info line,
     tooltips, dialog copy, the version label.
   - The uppercase card micro-captions use `calc(var(--fs-body) * 0.72)` and the
@@ -56,9 +56,9 @@ The table is built from a single **`colConfig`** array in `app.js`. Each column 
 
 **Showing / hiding columns:** a **Columns** dropdown in the filter bar lists one checkbox per column. Unchecking a box hides that column via DataTables `column().visible()`; all columns start visible. The hidden set persists server-side as `col_hidden` in `/api/settings` (a list of `target` names - the complement of the checked boxes, stored as the *hidden* set so a column added in a later build defaults to visible). It is applied on load alongside `col_order`, so visibility and drag-order are independent and both survive a reload. Because a hidden column's cells are dropped from the DOM, the column also disappears from the mobile cards (expected). All cell lookups are by `data-col` attribute (never by DOM position), so a hidden column never shifts another column's reads.
 
-**Sorting:** numeric and categorical columns carry a `data-dt-order` attribute, so DataTables sorts by real value instead of rendered text. Prices sort by number, speed and OCR by rank. Context sorts by its raw token count even though the cell renders a rounded `128k`. Every column is sortable; a field that has no column of its own (the HuggingFace and OpenRouter links, the personal note, the favourite star, ZDR, the pricing unit) is not sortable, because there is no column header to sort it by - each of those is filterable instead (the favourite via `#f_fav`).
+**Sorting:** numeric and categorical columns carry a `data-dt-order` attribute, so DataTables sorts by real value instead of rendered text. Prices sort by number, a dropdown-type custom column by its option's position (unset always sorts last - see **Custom columns** below), a text-type custom column alphabetically. Context sorts by its raw token count even though the cell renders a rounded `128k`. Every column is sortable; a field that has no column of its own (the HuggingFace and OpenRouter links, the personal note, the favourite star, ZDR, the pricing unit) is not sortable, because there is no column header to sort it by - each of those is filterable instead (the favourite via `#f_fav`).
 
-**Cell alignment:** every desktop cell - header and body - is **left-aligned** (`text-align: left`, `!important` on the body to beat DataTables' automatic right-align of numeric columns and centring of icon columns). Desktop data cells are also vertically centered (`vertical-align: middle`), so a multi-line name cell (name plus the capability-icon row beneath it) and the inline Speed/OCR/Rating selects all sit centered within their row.
+**Cell alignment:** every desktop cell - header and body - is **left-aligned** (`text-align: left`, `!important` on the body to beat DataTables' automatic right-align of numeric columns and centring of icon columns). Desktop data cells are also vertically centered (`vertical-align: middle`), so a multi-line name cell (name plus the capability-icon row beneath it) and every custom column's inline dropdown/text control all sit centered within their row.
 
 ### The Name cell
 
@@ -107,7 +107,7 @@ the same DOM either way:**
 **Column widths:** the table is `table-layout: auto` and fills the width (`autoWidth: false, width: '100%'`). Every column sizes to its content, with two deliberate exceptions:
 
 - **Name** is capped at `20rem` (`col-name` class) - long model names rendered with no width limit ballooned a single column past `~540px` and pushed the whole table past the viewport - with a **`16rem` min-width**, the floor it may be squeezed to. That number is measured, not guessed: across the 440-model catalog, `16rem` keeps **98%** of "name + date" inside two lines. `14.9rem` gets 96%, and reaching 100% needs `20.6rem` - 64px more table width to save nine models one line each.
-- **Speed / OCR / Rating** carry no column width at all. Each `<select>` is `width: max-content`, so it sizes to its own widest option; a shared fixed width held all three columns open wider than anything in them needed.
+- **Every dropdown-type custom column** carries no column width at all. Each `<select>` is `width: max-content`, so it sizes to its own widest option; a shared fixed width would hold the column open wider than anything in it needed.
 
 Widths live in the stylesheet, never in `columnDefs`: DataTables renders `columnDefs.width` into a `<colgroup><col style="width:...">` in `px`, which would not track the text size.
 
@@ -116,7 +116,7 @@ Widths live in the stylesheet, never in `columnDefs`: DataTables renders `column
 Curated fields are edited in place and saved automatically. There is no form and no save button.
 
 - **Favorite:** a star toggle. It has no column of its own - it is the last mark on **line 2 of the Name cell** (after the note icon), the only control on that row of otherwise-links. Clicking or keying it (Enter/Space) flips `data-fav` and saves. It writes **no** `data-dt-order`: the star lives in the Name cell, whose sort text is the model name, so stamping an order there would sort Name by favourite. The favourite is reached by the `#f_fav` filter instead of a sort.
-- **Speed / OCR / Rating:** small `<select>` dropdowns that share one look. Rating is a 0-4 select (0 shows an em-dash for "unset"); its option rows keep the red-to-green scale colours (`.ropt-0..4`) as a cue when the menu is open, but the closed control matches Speed/OCR. Rating sorts numerically via `data-dt-order` and saves through the same debounced queue. This dropdown is used in **both** the desktop table and the mobile cards.
+- **Custom columns** (personal, user-defined - see **Custom columns management** below for how you create and delete one): every column renders from its own definition (`{id, name, type, options}`, fetched once from `GET /api/custom-columns` before the table is built) rather than a hardcoded field name, so the table has no fixed limit on how many you add. A **dropdown** type (`dropdown_text` or `dropdown_number`) renders a small `<select>` (class `.cc-select`, one shared look for every dropdown column) of the column's own options, unset showing an em-dash, used in **both** the desktop table and the mobile cards. **No custom column carries any colour of its own.** A **text** type renders a click-to-edit cell (class `.cc-text-display`/`.cc-text-input`) modeled on the personal `notes` field below: a display span swaps to a single-line `<input>` on click and back on blur/Enter. Sorting: a dropdown sorts by its option's position (`data-dt-order`, unset always last, whatever the option count); text sorts alphabetically on the same attribute, kept in sync with the cell's text on every edit. Every custom column carries the shared `.cc-cell` class, which drives its card-view spacing and label (see **Card layout** below) with no per-column CSS.
 - **Notes (`notes`, personal):** click-to-edit text on the **third line of the Name
   cell**. A display span swaps to a `<textarea>` on click and back on blur/Enter.
   The line **collapses while the note is empty** (CSS `:has(.notes-placeholder)`), so
@@ -139,6 +139,16 @@ filter it from the header and set its colors from the Colors panel.
 
 - **OpenRouter link:** a link, not editable data, on line 2 of the Name cell. It renders OpenRouter's official **brand glyph** (their v2 mark, `OR_ICON`, inlined verbatim so the app stays self-contained) only for models that carry an OpenRouter `id` - source `openrouter` or `collection`. HuggingFace-direct and manual models have no `id`, so they show no logo. Unlike the other name-row marks (which stroke in `currentColor`), the glyph is **filled with the OpenRouter brand colour**, `--or-fill` - purple (`#7624F4`) in light, lime (`#C8FF00`) in dark, the two official variants - keyed off `data-theme` like every other themed colour. The path carries no `fill`; CSS drives it, and the glyph is sized by height (`0.95rem`) with `width: auto` so its 401.4:293.7 aspect ratio never distorts. The `.or-link` anchor opens that model's OpenRouter page - `https://openrouter.ai/<slug>` - in a new tab. This icon is the only OpenRouter-page link (the name opens the Details modal instead). Embedding the brand glyph here is nominative use - the icon links to that model's page on OpenRouter.
 
+## Custom columns management
+
+A **Custom columns** button sits in the filter bar next to **Columns**, following that same pattern (a button that opens a small dialog) rather than inventing a new one - it reuses the **Colors** panel's modal skeleton (`#color-modal-content` etc.) under its own ids (`#cc-manage-modal`/`#cc-manage-content`).
+
+The dialog lists every existing column (name + type) with a **Delete** button, and a form to add one: a name field, a type select (Text / Dropdown (text values) / Dropdown (number labels)), and - for either dropdown type only - a textarea for the allowed values, **one per line, in the order they should appear** (that line order becomes the column's fixed display order; there is no separate reorder control). The textarea is hidden for the Text type (`$('#cc-new-type').on('change', ...)` toggles it).
+
+**Delete asks first, in plain words.** Clicking Delete opens a native `confirm()` naming the column and stating plainly that it **permanently erases every model's stored value for it** and **cannot be undone** - there is no soft-delete or trash, since the cascade at the database level is immediate and real.
+
+**Create and delete both reload the page.** Either one changes the table's column *set*, not just a value, so - exactly like a column drag-reorder (`reorderColumns`) - there is no partial-rebuild path; the change is persisted through `POST`/`DELETE /api/custom-columns` and the page reloads, which rebuilds `colConfig` from the fresh column list deterministically.
+
 ## Saving
 
 Edits are pushed to an in-memory **queue, debounced ~0.5s**, then POSTed to `/api/save` as one batch. The most recent edit per model wins.
@@ -151,10 +161,11 @@ A small indicator reflects state (saving / saved / offline). A periodic `/api/he
 
 Every personal data edit can be undone and redone from two buttons at the start
 of the filter row (**Undo** / **Redo**), or with the keyboard (`Ctrl`/`Cmd`+`Z`
-to undo, `Ctrl`/`Cmd`+`Shift`+`Z` or `Ctrl`+`Y` to redo). This covers only the
-six editable personal fields - **favorite, notes, speed, rating, ocr_quality,
-pricing_note** - and nothing else. Filters, sort order, column show/hide, column
-order, colour thresholds and theme are **not** part of this history.
+to undo, `Ctrl`/`Cmd`+`Shift`+`Z` or `Ctrl`+`Y` to redo). This covers the three
+fixed personal fields - **favorite, notes, pricing_note** - plus **any custom
+column's value**, whatever number of them exist. Filters, sort order, column
+show/hide, column order, colour thresholds and theme are **not** part of this
+history.
 
 **Session-only, in memory.** The history is a plain pair of arrays (an undo stack
 and a redo stack) held in the page by a small self-contained module, `editHistory`
@@ -162,28 +173,34 @@ in `app.js`. It is **not** persisted - a page reload or a server restart starts
 with both stacks empty and both buttons disabled. There is no history table in the
 database and no change to what `/api/save` stores.
 
-**How it records.** Each of the six edit handlers, right after it applies the
-change to the cell and just before (or alongside) its `queueSave`, calls
+**How it records.** Each edit handler, right after it applies the change to the
+cell and just before (or alongside) its `queueSave`, calls
 `editHistory.record(name, field, oldValue, newValue)`. The `name` is the model's
-`data-name` (the same key the save path uses). The *old* value is captured **before**
-the edit is applied: the favorite toggle reads the star's prior `data-fav`; the
-click-to-edit notes stash their pre-edit text on the textarea (`data-orig`) and the
-commit handler reads it back; the Speed/OCR/Rating selects snapshot their committed
-value on `focus` (and refresh it after each change), so the change handler knows the
-value the select held before; the pricing-note editor compares the textarea against
-the badge's prior `data-pnote`. A record with no real change (old equals new) is
-dropped. Committing a fresh edit **clears the redo stack**.
+`data-name` (the same key the save path uses). `field` is a fixed name
+(`'favorite'`, `'notes'`, `'pricing_note'`) for the three fixed fields, or
+`'custom:<column id>'` for a custom column - one generic branch in `applyField`
+handles every custom column by looking its type up in `customColumnsById`, so a
+new custom column needs no new branch of its own.
+The *old* value is captured **before** the edit is applied: the favorite toggle
+reads the star's prior `data-fav`; the click-to-edit notes (and, identically, a
+text-type custom column) stash their pre-edit text on the input (`data-orig`) and
+the commit handler reads it back; a dropdown-type custom column's `<select>`
+records its committed value at render time in `data-prev`, refreshed after each
+change, so the change handler always knows the value it held before; the
+pricing-note editor compares the textarea against the badge's prior `data-pnote`.
+A record with no real change (old equals new) is dropped. Committing a fresh edit
+**clears the redo stack**.
 
 **How it restores.** `undo()` pops the undo stack, re-applies the record's *old*
 value, and pushes the record onto the redo stack; `redo()` is the mirror image (pop
 redo, apply the *new* value, push onto undo). Restoring drives the **same**
 cell-apply + `queueSave` path a manual re-edit uses, so the database always matches
-the visible cell - the select fields are restored by setting the control's value and
+the visible cell - a dropdown field is restored by setting the control's value and
 firing its own `change` handler (which does the `data-dt-order` bookkeeping and the
-save); favorite, notes and the pricing-note badge are rewritten directly and saved.
-A re-entrancy flag (`applying`) is raised for the duration of a restore so the edit
-handlers it triggers do **not** record a new history entry - one restore is one move,
-never a new edit.
+save); favorite, notes, a text-type custom column, and the pricing-note badge are
+rewritten directly and saved. A re-entrancy flag (`applying`) is raised for the
+duration of a restore so the edit handlers it triggers do **not** record a new
+history entry - one restore is one move, never a new edit.
 
 **Buttons.** Undo is disabled when the undo stack is empty; Redo is disabled when the
 redo stack is empty; both refresh on every edit, undo and redo. They sit in the filter
@@ -192,7 +209,7 @@ filters - clicking them never touches the saved filter state.
 
 ```mermaid
 flowchart LR
-  edit["Personal edit\n(fav / notes / speed /\nrating / ocr / pricing_note)"] --> rec["record(old,new)\npush undo, clear redo"]
+  edit["Personal edit\n(fav / notes / pricing_note /\nany custom column)"] --> rec["record(old,new)\npush undo, clear redo"]
   rec --> save["queueSave -> /api/save"]
   undoBtn["Undo (Ctrl+Z)"] --> pop["pop undo\napply OLD value\npush redo"]
   redoBtn["Redo (Ctrl+Shift+Z)"] --> pop2["pop redo\napply NEW value\npush undo"]
@@ -202,7 +219,20 @@ flowchart LR
 
 ## Filters
 
-A filter bar sits above the table. It has full-text search (name/notes/description), fixed-size summary multiselects for input/output modalities and year, simple selects for HF-link/OpenRouter/thinking/tool/MoE/notes/OCR/ZDR/Unit and a Favorites-only toggle, and numeric inputs for min context, max in/out price, min (active) params, and max on-disk size (GB). The max-size filter keeps rows that have no recorded size, sorting them to the bottom. A **Columns** dropdown (see the Table section) sits in the same bar and toggles which columns are shown.
+A filter bar sits above the table. It has full-text search (name/notes/description), fixed-size summary multiselects for input/output modalities and year, simple selects for HF-link/OpenRouter/thinking/tool/MoE/notes/ZDR/Unit and a Favorites-only toggle, numeric inputs for min context, max in/out price, min (active) params, and max on-disk size (GB), and one filter per custom column (see **Custom-column filters** below). The max-size filter keeps rows that have no recorded size, sorting them to the bottom. A **Columns** dropdown (see the Table section) and a **Custom columns** button (see **Custom columns management** above) sit in the same bar.
+
+### Custom-column filters
+
+Every custom column gets its own filter control, generated automatically - there is no fixed set to hardcode in `index.html`, since columns are created and deleted at runtime. `app.js`'s `buildCustomColumnFilters()` builds one control per entry in `customColumns` (the same array fetched from `GET /api/custom-columns` that extends `colConfig`) into `#cc-filters`, a wrapper that sits in the filter bar right after the **Unit** filter and before **Colors**. The wrapper is `display: contents` (`style.css`), so its generated children become direct flex items of `.filters-row` exactly like every other filter control, instead of stacking inside a nested block.
+
+- **Dropdown-type** (`dropdown_text`/`dropdown_number`): a `<select id="f_custom_<id>" class="filter-select-sm">` wrapped in a `.filters-label`, offering **All** plus each of the column's own option values in their defined order - the same shape the old fixed `f_speed`/`f_ocr` single-selects had before this feature replaced them, minus their emoji (a user-defined column has none).
+- **Text-type**: a plain `<input id="f_custom_<id>" class="filter-input">`, matching `#f_search`'s bare-input look, that substring-matches case-insensitively.
+
+Both read the row's committed value the same way every other custom-column code path does: the dropdown reads the row's own `.cc-select[data-col-id]` control (the same element `queueSave` reads), and the text filter calls the shared `rowCustomTextValue()` helper (the same one `queueSave` and `editHistory` already use) - so there is one definition of "this row's value" for a custom column, not a second one for filtering. Every control is wired into the same `$.fn.dataTable.ext.search.push` predicate the fixed filters use, AND-combined with all of them, so a custom-column filter narrows the table together with search/year/etc. exactly like any other filter. If a custom column's table column is currently hidden (via **Columns**), its cell is not in the DOM, so its filter has nothing to read and is silently inert for that column until it is shown again - the same behavior documented above for any filter that reads a cell rather than a row attribute.
+
+**Rebuild on column create/delete.** Because creating or deleting a custom column already reloads the page (see **Custom columns management** above), `buildCustomColumnFilters()` simply re-runs on that reload and produces the current column set's filters - no live add/remove path was needed.
+
+**Persistence.** Each control's value is saved and restored via its own `f_custom_<id>` key in `/api/settings` (an opaque JSON blob the server just stores, so a per-column key needs no server-side change), alongside the fixed `f_*` keys. The **Clear** button resets it the same way it resets every other filter, since it targets filter controls by their generic `input`/`select` tag inside the filter bar rather than by a fixed id list.
 
 **One line, Clear last.** All filter controls live in a single flex row (`.filters-row`) that wraps only as an overflow fallback - there is no forced second row. The **Clear** button is the last control in the row, after every filter and the Colors/Columns controls; clicking it empties every filter (keeping the colour thresholds) and resets the sort.
 
@@ -274,11 +304,12 @@ defined in `:root` (light values) and overridden in a `:root[data-theme="dark"]`
 block, so one attribute flip repaints the whole page with no per-element JS. Only
 *chrome* is themed (backgrounds, text, borders, the filter bar, modals, tooltips,
 and the bundled DataTables controls). **Semantic colours are deliberately
-not themed** - the price green/amber/red, the rating scale, the gold favorite star,
-and the HF brand colours carry meaning and read fine on both backgrounds. The dark
-block also sets `color-scheme: dark` so native control pop-ups, the caret, and
-scrollbars follow the theme. The Rating dropdown's option text is pinned dark in both
-themes so it never disappears on the lighter option-row scale colours.
+not themed** - the price green/amber/red, the gold favorite star, and the HF
+brand colours carry meaning and read fine on both backgrounds. No custom column
+carries a colour of its own, so every `.cc-select` option just inherits the
+normal themed control colours, needing no special-case override. The dark block also sets
+`color-scheme: dark` so native control pop-ups, the caret, and scrollbars follow
+the theme.
 
 **Persistence is `localStorage`, not the server.** Unlike the filter/column state
 (saved via `/api/settings`), the theme is stored per-device in `localStorage` and
@@ -330,11 +361,12 @@ line, and stops at its own content width.
 ```
 
 The `gap` (10px between rows, 14px between columns) is the general breathing room
-between every cell. The **Speed / OCR / Rating** controls need a touch more, because
-three small selects side by side read as one clump: each of those three cells adds
-`margin-inline: 8px`, and since flex `gap` and item margins **add**, two adjacent
-controls end up ~30px apart (14px gap + 8px + 8px) - visibly looser than the rest,
-with the cells' zero padding untouched so all three stay the same height.
+between every cell. **Custom columns** (the shared `.cc-cell` class) need a touch
+more, because several small controls side by side read as one clump: every such
+cell adds `margin-inline: 8px`, and since flex `gap` and item margins **add**, two
+adjacent controls end up ~30px apart (14px gap + 8px + 8px) - visibly looser than
+the rest, with the cells' zero padding untouched so they all stay the same height.
+This applies uniformly to any number of custom columns, not just a fixed three.
 
 Three declarations carry the design, and each is load-bearing:
 
@@ -388,8 +420,10 @@ sorting still read the cell's text and its `data-dt-order`, exactly as before.
 Tapping the model name opens the Details modal (there is no separate Details
 button); the name also carries the copy-id icon for OpenRouter-listed models.
 
-A few cells are **captioned** in card mode: input, output, speed, and rating take a
-small upper-case label from their `data-label`, on its own line above the value.
+A few cells are **captioned** in card mode: input, output, and every custom column
+(via the shared `.cc-cell` class, so any number of them are captioned with no
+per-column CSS) take a small upper-case label from their `data-label`, on its own
+line above the value.
 **CONTEXT**, **PARAMS**, **SIZE** and **IN** / **OUT** all take a literal upper-case
 word from a CSS `::before` rendered on its own line **above** the value
 (label-over-value) - so a price reads `IN` over `2 tkn [note]` exactly as Context
@@ -414,8 +448,12 @@ its own rounded border and a soft shadow, while the DataTables wrapper is flatte
 
 **Sort + pager bar.** Because the header is hidden, a mobile-only
 `#mobile-sortbar` sits under the top bar as a three-column grid: the **Filters**
-button on the left, a **Sort** field select (Name, Date, Context, Params, Size, In
-$, Out $, Rating, Speed) in the middle, and a direction toggle button on the right.
+button on the left, a **Sort** field select in the middle, and a direction toggle
+button on the right. The select starts with a fixed set of common fields (Name,
+Date, Context, Params, Size, In $, Out $) from `index.html`, and `app.js` appends
+one `<option>` per custom column after fetching the column definitions - the same
+pattern the `#f_year`/`#f_measurement` filters use to build their option lists
+from live data - so every custom column is reachable from the mobile sort bar too.
 The Filters button carries `margin-right: auto`, which pushes it to the left edge and
 packs the rest into a right-hand cluster: the **model counter** (`#model-count-m`),
 the Sort label, the select, and the direction button, in that order. The Sort select
@@ -470,8 +508,9 @@ transition-less base rule takes over) is **instant**. Instant close is the delib
 trade for a flash-free breakpoint with no JS driving the layout.
 
 **Touch editing.** Every inline edit is a real click/tap handler, so the star,
-rating and speed/OCR selects, click-to-edit notes, and the pricing-note modal all
-work by tap with no extra code. The pricing-note icon needs a touch tweak: on desktop
+every custom column's dropdown or click-to-edit text field, click-to-edit notes,
+and the pricing-note modal all work by tap with no extra code. The pricing-note
+icon needs a touch tweak: on desktop
 its faint glyph only appears on cell hover, which a finger can never trigger, so in
 card mode it is always visible - the empty state is just the muted note glyph (no
 box), and both states carry transparent padding for a comfortable tap target - and a
@@ -515,12 +554,21 @@ desktop value is never touched.
 
 Plain ES + jQuery, no transpiler. Keep rendering `colConfig`-driven (look up by `target`, not index). When adding an editable column, follow the existing inline-edit + debounced-save pattern (render -> edit handler -> `queueSave`).
 
-**`/api/save` is a partial update, and `queueSave` depends on that.** `store.SaveCurated` writes only the keys the payload carries and leaves every other curated field at its stored value. So a field whose control is not in the DOM - the Name column hidden, both price columns hidden, or a model with no price to hang the badge on - must have its key **omitted**, not sent as `""`. Sending `""` would not save "nothing"; it would delete the stored note. Any new field read from a cell has to make the same check.
+**`/api/save` is a partial update, and `queueSave` depends on that.** `store.SaveCurated` writes only the keys the payload carries and leaves every other curated field at its stored value. So a field whose control is not in the DOM - the Name column hidden, both price columns hidden, or a model with no price to hang the badge on - must have its key **omitted**, not sent as `""`. Sending `""` would not save "nothing"; it would delete the stored note. Any new field read from a cell has to make the same check. Custom columns follow the identical rule one level down: `queueSave` builds a `custom_values` object by checking each column's control is actually in the DOM before adding its entry, so a hidden custom column is left out of `custom_values` entirely rather than sent as an empty value that would clear it.
 
 **Style with classes, not inline `style` attributes.** Cell appearance lives in
-`style.css` as classes (e.g. `.price-cell`, `.rating-select` + `.ropt-0..4`,
+`style.css` as classes (e.g. `.price-cell`, `.cc-select`, `.cc-text-display`,
 `.cap-*`, `.fav-star.is-fav`), so the theme tokens reach every element and dark
 mode needs no per-element overrides. The one allowed inline style is a value that
 is genuinely *continuous* and cannot be enumerated as a class: the In $/Out $
 price pill sets only its `background-color` inline (a colour computed from the
 per-measurement thresholds). Discrete states use a class instead.
+
+**A new custom-column type follows the same generic path, not a new branch per
+field.** `renderCell` switches on `c.custom` (present for every custom-column
+entry in `colConfig`), not on a hardcoded target name; a new predefined type would
+extend the two existing `c.custom.type` branches (dropdown vs. text) in
+`renderCell`, the `.cc-select`/`change` and `.cc-text-input`/`blur|keydown`
+handlers, and `editHistory`'s `'custom:'`-prefixed branch in `applyField` - never
+a new hardcoded field name threaded separately through `colConfig`, `renderCell`,
+`queueSave`, and `editHistory`.

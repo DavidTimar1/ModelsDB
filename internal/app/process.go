@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"modelsdb/internal/dbcore"
 	"modelsdb/internal/shared"
+	"modelsdb/internal/store"
 	"strings"
 )
 
@@ -18,6 +19,14 @@ func joinMods(r map[string]interface{}, key string) string {
 
 func processModels() ([]map[string]interface{}, error) {
 	rows, err := dbcore.GetAllModels()
+	if err != nil {
+		return nil, err
+	}
+
+	// One query for every model's custom-column values (instead of one query per
+	// row), grouped by model name. A model with none gets an empty map, never a
+	// missing key, so the frontend never has to guard against a null.
+	allCustomValues, err := store.AllCustomValues()
 	if err != nil {
 		return nil, err
 	}
@@ -59,10 +68,7 @@ func processModels() ([]map[string]interface{}, error) {
 			"pricing_note":       shared.GetStr(r, "pricing_note"),
 
 			"notes":             shared.GetStr(r, "notes"),
-			"speed":             shared.GetStr(r, "speed"),
-			"rating":            shared.GetNum(r, "rating"),
 			"favorite":          shared.GetNum(r, "favorite"),
-			"ocr_quality":       shared.GetStr(r, "ocr_quality"),
 			"tool":              shared.GetStr(r, "tool"),
 			"moe":               shared.GetStr(r, "moe"),
 			"parameters":        r["parameters"],
@@ -73,6 +79,12 @@ func processModels() ([]map[string]interface{}, error) {
 			"model_type":  shared.GetStr(r, "model_type"),
 			"source":      shared.GetStr(r, "source"),
 			"collections": dbcore.ParseArr(shared.GetStr(r, "collections")),
+
+			// User-defined personal columns (the generic replacement for the old
+			// fixed Speed/Rating/OCR fields): this model's stored value per column
+			// id, e.g. {"3": "fast"}. A column this model has no value for is
+			// simply absent from the map.
+			"custom_values": customValuesOrEmpty(allCustomValues[name]),
 
 			"_raw": raw,
 		}
@@ -88,4 +100,14 @@ func processModels() ([]map[string]interface{}, error) {
 	}
 
 	return merged, nil
+}
+
+// customValuesOrEmpty normalizes a missing custom-values map to an empty (but
+// non-nil) one, so processModels always emits a `custom_values` object in the
+// JSON response rather than `null` for a model with no custom-column values.
+func customValuesOrEmpty(m map[int64]string) map[int64]string {
+	if m == nil {
+		return map[int64]string{}
+	}
+	return m
 }

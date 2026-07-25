@@ -81,7 +81,7 @@ Each script starts the server directly (no interactive menu) and binds this mach
 
 ## What's in the catalog
 
-The catalog starts from the OpenRouter API and is enriched to also cover model types the API does not return on its own, such as image, video, embedding, rerank, and speech models. Each model carries pricing, capabilities, and a Zero Data Retention (ZDR) flag, on top of which you layer your own notes, ratings, speed and OCR tags, and favorites. Your personal annotations live only in your local database and are never written to any shared file. For how all of this is fetched, stored, and derived, see [ARCHITECTURE.md](ARCHITECTURE.md).
+The catalog starts from the OpenRouter API and is enriched to also cover model types the API does not return on its own, such as image, video, embedding, rerank, and speech models. Each model carries pricing, capabilities, and a Zero Data Retention (ZDR) flag, on top of which you layer your own notes, favorites, and any personal columns you define yourself - a plain text field, or a single-select dropdown of text or number labels (a fresh install already starts with three: Speed, Rating, OCR). Add or remove a column any time from the **Custom columns** button in the filter bar. Your personal annotations live only in your local database and are never written to any shared file. For how all of this is fetched, stored, and derived, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Refreshing data
 
@@ -166,7 +166,8 @@ The server runs on a fixed port, bound to loopback by default, so other local ap
 
 > **Reaching it from another device.** By default the server listens only on `127.0.0.1` (this machine). To open it on another device — a laptop, a phone, another box on your [Tailscale](https://tailscale.com/) tailnet — set `host` in `config.jsonc`. The simplest value is `"tailscale"`: the app finds this machine's Tailscale `100.x` address itself and binds it (if Tailscale is down or not installed, it logs a warning and stays loopback-only). You can also set `host` to a specific address the other device can reach (a `100.x` IP from `tailscale ip -4`, or a LAN IP). The server keeps loopback bound as well, so local tools keep working. **There is no authentication:** anyone who can route to a non-loopback address you bind gets full read/write, including the endpoints that change data and replace the binary. So the server **refuses to bind a public or `0.0.0.0` address** by default — you must pass `--allow-public` (or set `"allow_public": true`, or `MODELSDB_ALLOW_PUBLIC=1`) to acknowledge the exposure. Prefer a private address (Tailscale/VPN/LAN) over a public one.
 
-- `GET /api/models?<filters>` returns a JSON array of matching models.
+- `GET /api/models?<filters>` returns a JSON array of matching models, each carrying a `custom_values` object for any personal columns you have defined.
+- `GET /api/custom-columns` returns your personal column definitions (name, type, options).
 - `GET /api` (no query string) returns a markdown usage guide written for an AI agent.
 - `GET /api/health` returns status.
 - `GET /api/paths` returns the on-disk locations this instance resolved at startup.

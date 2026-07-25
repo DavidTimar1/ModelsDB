@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 )
 
@@ -220,6 +221,80 @@ func handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleCustomColumns (GET/POST/DELETE /api/custom-columns) is the CRUD surface
+// for user-defined personal columns: GET lists every column definition (with its
+// dropdown options, if any); POST creates one from {name, type, options}; DELETE
+// (?id=<id>) removes one, which cascades to wipe every model's stored value for
+// it (enforced by the DB's ON DELETE CASCADE, not by code here). Per-model
+// VALUES are not served here - they ride embedded in each row of
+// GET /api/models (custom_values), and are written back alongside the curated
+// fields in a normal /api/save batch (see handleSaveModels below), so the
+// existing autosave/retry/debounce machinery covers custom columns too without
+// a second save pipeline.
+func handleCustomColumns(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	switch r.Method {
+	case http.MethodGet:
+		cols, err := store.ListCustomColumns()
+		if err != nil {
+			log.Printf("ERROR [%s %s] list custom columns: %v", r.Method, r.URL.Path, err)
+			http.Error(w, fmt.Sprintf("Failed to list custom columns: %v", err), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(cols)
+
+	case http.MethodPost:
+		var body struct {
+			Name    string   `json:"name"`
+			Type    string   `json:"type"`
+			Options []string `json:"options"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			log.Printf("ERROR [%s %s] JSON decode failed: %v", r.Method, r.URL.Path, err)
+			http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+			return
+		}
+		id, err := store.CreateCustomColumn(body.Name, body.Type, body.Options)
+		if err != nil {
+			log.Printf("ERROR [%s %s] create custom column: %v", r.Method, r.URL.Path, err)
+			http.Error(w, fmt.Sprintf("Failed to create custom column: %v", err), http.StatusBadRequest)
+			return
+		}
+		cols, err := store.ListCustomColumns()
+		if err != nil {
+			log.Printf("ERROR [%s %s] list after create: %v", r.Method, r.URL.Path, err)
+			http.Error(w, fmt.Sprintf("Column created but failed to list it back: %v", err), http.StatusInternalServerError)
+			return
+		}
+		log.Printf("ok /api/custom-columns created id=%d name=%q type=%q", id, body.Name, body.Type)
+		for _, c := range cols {
+			if c.ID == id {
+				json.NewEncoder(w).Encode(c)
+				return
+			}
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"id": id})
+
+	case http.MethodDelete:
+		id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+		if err != nil {
+			http.Error(w, "Invalid or missing id", http.StatusBadRequest)
+			return
+		}
+		if err := store.DeleteCustomColumn(id); err != nil {
+			log.Printf("ERROR [%s %s] delete custom column %d: %v", r.Method, r.URL.Path, id, err)
+			http.Error(w, fmt.Sprintf("Failed to delete custom column: %v", err), http.StatusInternalServerError)
+			return
+		}
+		log.Printf("ok /api/custom-columns deleted id=%d", id)
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+
+	default:
+		log.Printf("ERROR [%s %s] unsupported method", r.Method, r.URL.Path)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func handleGetModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		log.Printf("ERROR [%s %s] unsupported method", r.Method, r.URL.Path)
@@ -246,6 +321,13 @@ func handleGetModels(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(out)
 }
 
+// handleSaveModels (POST /api/save) applies a batch of partial curated updates.
+// Each item is keyed by model name and may carry any of the fixed curated
+// fields (applied via store.SaveCurated's read-modify-write merge) plus an
+// optional `custom_values` object - {"<column id>": "<value>"} - for the
+// user-defined personal columns. Unlike the fixed fields, a custom value needs
+// no merge step (each column is already an independent, sparse row), so it is
+// applied directly via store.SetCustomValue, one call per entry.
 func handleSaveModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		log.Printf("ERROR [%s %s] unsupported method", r.Method, r.URL.Path)
@@ -272,6 +354,20 @@ func handleSaveModels(w http.ResponseWriter, r *http.Request) {
 			log.Printf("ERROR saving %q: %v", name, err)
 			http.Error(w, fmt.Sprintf("Failed to save %q: %v", name, err), http.StatusInternalServerError)
 			return
+		}
+		if cv, ok := u["custom_values"].(map[string]interface{}); ok {
+			for k, v := range cv {
+				colID, err := strconv.ParseInt(k, 10, 64)
+				if err != nil {
+					continue
+				}
+				s, _ := v.(string)
+				if err := store.SetCustomValue(name, colID, s); err != nil {
+					log.Printf("ERROR saving custom value (model=%q column=%d): %v", name, colID, err)
+					http.Error(w, fmt.Sprintf("Failed to save custom value for %q: %v", name, err), http.StatusInternalServerError)
+					return
+				}
+			}
 		}
 		saved++
 	}

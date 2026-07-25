@@ -31,7 +31,8 @@
 </div>
 
 <!-- Mobile-only sort + direction bar (hidden on desktop via CSS). It drives the
-     same DataTables order as a desktop header click. -->
+     same DataTables order as a desktop header click. One <option> per custom
+     column is appended by app.js after it fetches the column definitions. -->
 <div id="mobile-sortbar">
   <button id="btn-filters" class="btn-filters-toggle" type="button" title="Show filters">Filters</button>
   <span id="model-count-m" class="model-count" title="Models shown of total"></span>
@@ -45,8 +46,6 @@
       <option value="disk_size_gb">Size</option>
       <option value="prompt">In $</option>
       <option value="completion">Out $</option>
-      <option value="rating">Rating</option>
-      <option value="speed">Speed</option>
     </select>
   </label>
   <button id="m_sort_dir" type="button" data-dir="asc" title="Toggle sort direction" aria-label="Toggle sort direction">&#8593;</button>
@@ -99,13 +98,6 @@
     <option value="text">text</option><option value="image">image</option><option value="audio">audio</option><option value="video">video</option><option value="file">file</option>
   </select>
 
-  <select id="f_speed" class="filter-select">
-    <option value="">Speed: All</option>
-    <option value="fast">Fast</option>
-    <option value="avg">Avg</option>
-    <option value="slow">Slow</option>
-  </select>
-
   <label class="filters-label">⭐ Favorites
     <select id="f_fav" class="filter-select-sm">
       <option value="">All</option><option value="yes">Favorites only</option>
@@ -126,10 +118,6 @@
     <select id="f_has_notes" class="filter-select-sm">
       <option value="">All</option><option value="yes">Has notes</option><option value="no">No notes</option>
     </select></label>
-  <label class="filters-label">📸 OCR
-    <select id="f_ocr" class="filter-select-sm">
-      <option value="">All</option><option value="good">Good</option><option value="bad">Bad</option>
-    </select></label>
   <label class="filters-label">🔒 ZDR
     <select id="f_zdr" class="filter-select-sm">
       <option value="">All</option><option value="yes">Yes</option><option value="no">No</option>
@@ -138,11 +126,19 @@
     <select id="f_measurement" class="filter-select-sm">
       <option value="">All</option>
     </select></label>
+
+  <!-- One filter control per custom column, built and rebuilt by app.js from
+       GET /api/custom-columns (there is no fixed set to hardcode here - columns
+       are created/deleted at runtime). display:contents (style.css) lets the
+       generated controls flow as direct children of .filters-row. -->
+  <div id="cc-filters"></div>
+
   <button id="color-btn" class="btn-colors" title="Set the In $/Out $ cell colour thresholds for each pricing unit">🎨 Colors</button>
   <div id="col-toggle" class="col-toggle">
     <button id="col-toggle-btn" type="button" class="btn-colors" title="Show or hide table columns">🧬 Columns</button>
     <div id="col-toggle-panel" class="col-toggle-panel"></div>
   </div>
+  <button id="cc-manage-btn" type="button" class="btn-colors" title="Create or delete your own personal columns (text, or a single-select dropdown)">➕ Custom columns</button>
   <button id="f_clear" class="btn-clear">Clear</button>
   <span id="model-count" class="model-count" title="Models shown of total"></span>
   </div>
@@ -208,6 +204,32 @@
     <div class="color-actions">
       <button id="color-reset" class="btn-clear">Reset to defaults</button>
       <button id="color-done" class="btn-update">Done</button>
+    </div>
+  </div>
+</div>
+
+<div id="cc-manage-modal">
+  <div id="cc-manage-content">
+    <span id="cc-manage-close">&times;</span>
+    <h3>Custom columns</h3>
+    <p class="color-hint">Personal columns you define yourself - a plain text field, or a single-select dropdown of text or number labels. They live only in this database: never shared, never published, never exported to <code>curated.json</code>.</p>
+    <table id="cc-manage-table">
+      <thead><tr><th>Name</th><th>Type</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="cc-manage-new">
+      <h4>Add a column</h4>
+      <input type="text" id="cc-new-name" placeholder="Column name..." class="filter-input">
+      <select id="cc-new-type" class="filter-select">
+        <option value="text">Text</option>
+        <option value="dropdown_text">Dropdown (text values)</option>
+        <option value="dropdown_number">Dropdown (number labels)</option>
+      </select>
+      <textarea id="cc-new-options" placeholder="One value per line, in the order they should appear..." style="display:none"></textarea>
+      <div class="cc-manage-new-actions">
+        <button id="cc-new-create" class="btn-update">Add column</button>
+        <span id="cc-new-status" class="paths-hint" style="margin:0;"></span>
+      </div>
     </div>
   </div>
 </div>

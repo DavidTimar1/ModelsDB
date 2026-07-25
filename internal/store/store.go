@@ -214,9 +214,9 @@ INSERT INTO models
   input_modalities, output_modalities, supports_reasoning,
   price_prompt, price_completion, price_image, price_audio, price_internal_reasoning,
   price_display, pricing_url, measurement, pricing_note,
-  notes, speed, rating, favorite, ocr_quality, tool, moe, parameters, active_parameters, disk_size_gb,
+  notes, favorite, tool, moe, parameters, active_parameters, disk_size_gb,
   raw_json, created_at, updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(name) DO UPDATE SET
   model_type=CASE WHEN models.model_type IN ('','chat') THEN excluded.model_type ELSE models.model_type END,
   hf_slug=excluded.hf_slug, author=excluded.author,
@@ -236,7 +236,7 @@ ON CONFLICT(name) DO UPDATE SET
 		priceFromRec(rec, "price_image", "image"), priceFromRec(rec, "price_audio", "audio"),
 		priceFromRec(rec, "price_internal_reasoning", "internal_reasoning"),
 		shared.GetStr(rec, "price_display"), shared.GetStr(rec, "pricing_url"), shared.GetStr(rec, "measurement"), shared.GetStr(rec, "pricing_note"),
-		shared.GetStr(rec, "notes"), shared.GetStr(rec, "speed"), shared.GetNum(rec, "rating"), fav, shared.GetStr(rec, "ocr_quality"),
+		shared.GetStr(rec, "notes"), fav,
 		tool, moe, dbcore.NullInt(rec["parameters"]), dbcore.NullInt(rec["active_parameters"]), dbcore.NullFloat(rec["disk_size_gb"]),
 		string(rawJSON), shared.GetStr(rec, "created_at"), dbcore.NowStamp())
 	return err
@@ -280,10 +280,10 @@ func UpdateCurated(name string, c map[string]interface{}) error {
 			return err
 		}
 	}
-	_, err := dbcore.DB.Exec(`UPDATE models SET notes=?, speed=?, rating=?, favorite=?, ocr_quality=?,
+	_, err := dbcore.DB.Exec(`UPDATE models SET notes=?, favorite=?,
 		tool=COALESCE(NULLIF(?,''), tool), moe=COALESCE(NULLIF(?,''), moe),
 		parameters=?, active_parameters=?, disk_size_gb=?, measurement=?, pricing_note=?, updated_at=? WHERE name=?`,
-		shared.GetStr(c, "notes"), shared.GetStr(c, "speed"), shared.GetNum(c, "rating"), fav, shared.GetStr(c, "ocr_quality"),
+		shared.GetStr(c, "notes"), fav,
 		shared.GetStr(c, "tool"), shared.GetStr(c, "moe"), dbcore.NullInt(c["parameters"]), dbcore.NullInt(c["active_parameters"]), dbcore.NullFloat(c["disk_size_gb"]),
 		shared.GetStr(c, "measurement"), shared.GetStr(c, "pricing_note"), dbcore.NowStamp(), name)
 	return err
@@ -314,14 +314,14 @@ func SaveCurated(name string, u map[string]interface{}) error {
 		return nil
 	}
 	cur := map[string]interface{}{}
-	var notes, speed, ocr, tool, moe, measurement, pricingNote string
-	var rating, favorite int64
+	var notes, tool, moe, measurement, pricingNote string
+	var favorite int64
 	var params, aparams sql.NullInt64
 	var diskSize sql.NullFloat64
-	err := dbcore.DB.QueryRow(`SELECT notes, speed, rating, favorite, ocr_quality, tool, moe, parameters, active_parameters, disk_size_gb, measurement, pricing_note
-		FROM models WHERE name=?`, name).Scan(&notes, &speed, &rating, &favorite, &ocr, &tool, &moe, &params, &aparams, &diskSize, &measurement, &pricingNote)
+	err := dbcore.DB.QueryRow(`SELECT notes, favorite, tool, moe, parameters, active_parameters, disk_size_gb, measurement, pricing_note
+		FROM models WHERE name=?`, name).Scan(&notes, &favorite, &tool, &moe, &params, &aparams, &diskSize, &measurement, &pricingNote)
 	if err == nil {
-		cur["notes"], cur["speed"], cur["rating"], cur["favorite"], cur["ocr_quality"], cur["tool"], cur["moe"] = notes, speed, rating, favorite, ocr, tool, moe
+		cur["notes"], cur["favorite"], cur["tool"], cur["moe"] = notes, favorite, tool, moe
 		cur["measurement"], cur["pricing_note"] = measurement, pricingNote
 		if params.Valid {
 			cur["parameters"] = params.Int64
@@ -335,7 +335,7 @@ func SaveCurated(name string, u map[string]interface{}) error {
 	} else if err != sql.ErrNoRows {
 		return err
 	}
-	for _, k := range []string{"notes", "speed", "ocr_quality", "tool", "moe", "rating", "favorite", "parameters", "active_parameters", "disk_size_gb", "measurement", "pricing_note"} {
+	for _, k := range []string{"notes", "tool", "moe", "favorite", "parameters", "active_parameters", "disk_size_gb", "measurement", "pricing_note"} {
 		if v, ok := u[k]; ok {
 			cur[k] = v
 		}
@@ -358,18 +358,20 @@ func FindNameByID(id string) (string, bool) {
 // ExportData writes the objective catalog snapshot to the data dir's
 // curated.json. The database (modelsdb.db) is the single source of truth for ALL
 // model data, objective and personal; curated.json is a one-way EXPORT of just
-// the OBJECTIVE subset. Personal data (notes/ratings/etc.) lives only in the DB
-// and is deliberately never written to any file, so it is never published. Back
-// up personal data by copying modelsdb.db.
+// the OBJECTIVE subset. Personal data (notes/favorite/custom columns/etc.) lives
+// only in the DB and is deliberately never written to any file, so it is never
+// published. Back up personal data by copying modelsdb.db.
 func ExportData() error {
 	return ExportCuratedJSON(paths.CuratedJsonFile)
 }
 
 // ExportCuratedJSON writes the objective catalog snapshot: every model's
 // objective curated fields plus enough identity/metadata to rebuild non-API
-// models. Personal fields (notes/speed/rating/favorite/ocr_quality) and unlisted
-// models are deliberately excluded so the file holds only shareable, objective
-// data - they stay in the database and are never exported.
+// models. Personal fields (notes/favorite) and unlisted models are deliberately
+// excluded so the file holds only shareable, objective data - they stay in the
+// database and are never exported. User-defined custom columns are excluded even
+// more strongly: they live in their own tables (see internal/store/custom_columns.go)
+// that this function never queries at all, so there is nothing here to exclude.
 func ExportCuratedJSON(path string) error {
 	b, err := CuratedBytes()
 	if err != nil {
