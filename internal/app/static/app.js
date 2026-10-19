@@ -9032,6 +9032,9 @@ $(async function () {
     if (cardsQuery.matches) {
       $('body').removeClass('filters-drawer-open');
       syncFilterFunnel();
+      // The closed drawer is visibility:hidden, which drops focus from the
+      // control that held it; the Filters button that opens it takes focus back.
+      $('#btn-funnel, #btn-filters').filter(function () { return this.offsetParent !== null; }).first().trigger('focus');
       return;
     }
     setFiltersOpen(false);

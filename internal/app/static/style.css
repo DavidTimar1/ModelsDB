@@ -3133,9 +3133,14 @@ tr.variation-row td.col-name { overflow-wrap: anywhere; }
     overflow-y: auto;
     z-index: 1200;
     transform: translateX(-100%);
-    box-shadow: 2px 0 18px var(--shadow-strong);
+    /* Closed, the drawer is off-screen AND out of the tab order and the reading
+       order: visibility hidden removes its controls from both. Its shadow is only
+       on the open state, because a shadow on the closed drawer bleeds about 20px
+       onto the left edge of the page. Closing is instant (no transition on this
+       rule), so nothing needs to wait for a slide-out before hiding. */
+    visibility: hidden;
   }
-  body.filters-drawer-open .filters-container { transform: none; transition: transform 0.25s ease; }
+  body.filters-drawer-open .filters-container { transform: none; visibility: visible; box-shadow: 2px 0 18px var(--shadow-strong); transition: transform 0.25s ease; }
   #filters-backdrop {
     display: none;
     position: fixed;
@@ -3675,6 +3680,15 @@ tr.variation-row td.col-name { overflow-wrap: anywhere; }
 
   #m_sort { min-height: calc(44px * var(--glass, 1)); }
   #m_sort_dir { width: calc(44px * var(--glass, 1)); height: calc(44px * var(--glass, 1)); }
+  /* Two rows by design: Filters and the counter on row 1; the Sort label, the
+     select and the direction button on row 2. One row cannot hold them (the
+     select would shrink to a sliver at 360 and 320). The label's basis is the bar
+     width minus the direction button (44) and one gap (8), both times the glass,
+     so the label can never share row 1 and leaves exactly the room the button
+     needs on row 2. The select then fills the label and cuts a long field name
+     with an ellipsis; the open list shows it in full. */
+  #mobile-sortbar .msb-sort { flex: 1 1 calc(100% - 52px * var(--glass, 1)); min-width: 0; }
+  #m_sort { flex: 1 1 0; width: auto; min-width: 0; max-width: none; text-overflow: ellipsis; }
 
   .dt-container .dt-paging .dt-paging-button { min-width: calc(40px * var(--glass, 1)); min-height: calc(40px * var(--glass, 1)); }
 

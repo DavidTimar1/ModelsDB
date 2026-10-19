@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Every commit bumps the version in `VERSION` and adds a matching entry here.
 
+## [10.25.7] - 2026-10-19
+
+### Fixed
+
+- **On a phone the sort bar no longer leaves the sort direction button alone on a second line at the left.** The bar now has two rows at every text size: Filters and the model counter on the first, the Sort label, the sort field list and the direction button on the second. The field list fills the space between the label and the button, and a long field name is cut with an ellipsis and shows in full when the list is open. The desktop layout and the table view do not change.
+- **On a phone the closed filters drawer no longer draws a dark strip at the left edge of the page, and the keyboard no longer lands on it.** The drawer's shadow now shows only while it is open. While it is closed it is hidden from the Tab key and from screen readers, so Tab after the sort direction button goes to the first card control. Closing the drawer with its X or the dimmed backdrop puts focus back on the Filters button.
+
 ## [10.25.6] - 2026-10-19
 
 ### Fixed
