@@ -4,221 +4,215 @@
 [![Release](https://img.shields.io/github/v/release/DavidTimar1/ModelsDB?sort=semver)](https://github.com/DavidTimar1/ModelsDB/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A web application for browsing, rating, and annotating AI models. It is primarily built on the live model list from OpenRouter, and can be expanded with HuggingFace (via a Skill) or any other model source. It runs as a single self-contained Go binary that serves a local web UI.
+A web application for browsing, rating and annotating AI models. It reads the live model list from OpenRouter, it can read a model's repository on HuggingFace, and it lets you write your own answers on top of both. It runs as a single self-contained Go binary that serves a local web page.
 
 ![ModelsDB web UI: a sortable, filterable table of AI models with pricing, capabilities, and personal annotations](docs/screenshot.png)
 
+> **Coming from ModelsDB 1.29.0 or 1.30.1? This version is not backwards compatible.** It cannot open a database made by a 1.x version: it refuses it and changes nothing in it. Carrying an existing database into this version is a one-time manual job in a terminal, with a separate conversion download, and we recommend having an AI assistant (Claude, ChatGPT or similar) guide you through it, step by step, from [docs/migration.md](docs/migration.md). Copy your database first. A new install needs none of this.
+
+## Contents
+
+- [Background](#background)
+- [Is this safe?](#is-this-safe)
+- [Quick start](#quick-start)
+- [Run from source](#run-from-source)
+- [What is in the catalog](#what-is-in-the-catalog)
+- [Adding, editing and removing models](#adding-editing-and-removing-models)
+- [Columns](#columns)
+- [Finding a model](#finding-a-model)
+- [Updating the app itself](#updating-the-app-itself)
+- [Where your data lives](#where-your-data-lives)
+- [Backing up your data](#backing-up-your-data)
+- [Query API](#query-api)
+- [Building and releasing](#building-and-releasing)
+- [More documents](#more-documents)
+- [License and contributing](#license-and-contributing)
+
 ## Background
 
-This is a hobby project. I built it because I couldn't find an easy way to track the AI-model tests I run for other projects, and to get a clear, at-a-glance view of model costs and capabilities. I have limited time for it right now, but contributions are welcome. See [Contributing](#contributing).
+This is a hobby project. I built it because I could not find an easy way to track the AI-model tests I run for other projects, and to get a clear view of model costs and capabilities. I have limited time for it, but contributions are welcome.
 
 ## Is this safe?
 
-Yes. ModelsDB runs entirely on your machine. It has no accounts, no telemetry, and no background server. It only reaches the network to fetch the public model catalog from OpenRouter (and, optionally, GitHub for the catalog and update check).
+Yes, by default. ModelsDB runs entirely on your machine. It has no accounts, no telemetry and no background service of its own. It reaches the network only to fetch the public model catalog from OpenRouter, to read a HuggingFace repository when you ask it to, and to ask GitHub whether a newer version of the app exists.
 
-Don't just take my word for it. Paste this repo into an AI and ask:
+Do not take my word for it. Paste this repository into an AI and ask:
 
 - [Ask Claude](https://claude.ai/new?q=Is%20https%3A//github.com/DavidTimar1/ModelsDB%20safe%2C%20will%20it%20spy%20on%20me%2C%20will%20it%20put%20malware%20or%20virus%20on%20my%20computer%2C%20why%20is%20my%20computer%20alerting%20me%20when%20I%20want%20to%20run%20the%20exe%20file%3F)
 - [Ask ChatGPT](https://chatgpt.com/?q=Is%20https%3A//github.com/DavidTimar1/ModelsDB%20safe%2C%20will%20it%20spy%20on%20me%2C%20will%20it%20put%20malware%20or%20virus%20on%20my%20computer%2C%20why%20is%20my%20computer%20alerting%20me%20when%20I%20want%20to%20run%20the%20exe%20file%3F)
 
-**Why does my computer warn me about the .exe?** The binary is not code-signed (signing certificates cost money this hobby project doesn't spend). Windows SmartScreen and some antivirus tools flag any unsigned, less-common executable by default. You can read the full source here, build it yourself, or run it from source instead. To report a concern, see [SECURITY.md](SECURITY.md).
+**Why does my computer warn me about the .exe?** The binary is not code-signed, because signing certificates cost money this hobby project does not spend. Windows SmartScreen and some antivirus tools flag any unsigned, less-common executable. You can read the source, build it yourself, or run it from source. To report a concern, see [docs/security.md](docs/security.md).
 
 ## Quick start
 
 1. Download the latest binary from the [Releases page](https://github.com/DavidTimar1/ModelsDB/releases): `modelsdb.exe` for Windows, `modelsdb` for Linux.
-2. Run it. On Windows, double-click `modelsdb.exe` (a console window stays open with the log). On Linux, run `chmod +x modelsdb && ./modelsdb`.
+2. Run it. On Windows, double-click `modelsdb.exe`. On Linux, `chmod +x modelsdb && ./modelsdb`.
 3. Open `http://127.0.0.1:8122` in your browser.
 
-On first run the app seeds itself from a catalog **built into the binary**, so the table is populated immediately - no network fetch, no setup step. It then refreshes the live OpenRouter models in the background. You can re-run that refresh any time with the **Update models** button.
+The app starts empty and fills itself from OpenRouter: **Update models**, in the menu at the top right, stores every model OpenRouter lists and keeps what you already hold up to date. It runs every time the app starts too. A model new to your catalog arrives on the list, and the page says how many arrived.
 
-The app creates its own config, data, and cache folders automatically. You don't need to place anything next to the binary. To put those folders somewhere specific, see [Data locations & configuration](#data-locations--configuration).
-
-### Running it in the background
-
-When you start `modelsdb` in a terminal without a command, it shows a small menu:
-
-```
-ModelsDB 1.9.0  [stopped]  port 8122
-  1) Start in background
-  2) Stop background instance
-  3) Start normally (foreground)
-  4) Status / open in browser
-  5) Update models now
-  6) Add to PATH (run 'modelsdb' from anywhere)
-  7) Quit
-```
-
-- **Start in background** keeps the server running after you close the terminal (or the console window on Windows), and hands the prompt back to you.
-- **Stop background instance** shuts down a server started that way.
-- **Add to PATH** makes the `modelsdb` command work from any terminal. On Linux/macOS you choose either a symlink into `~/.local/bin` or adding the binary's folder to your shell's PATH (it edits `~/.bashrc`, `~/.zshrc`, or `~/.profile` to match your shell); on Windows it adds the folder to your user PATH. Picking one method removes the other, and it only ever touches the entries it created. This takes effect in **new** terminals.
-
-The same actions are available as commands, which is what you want in a script or a service:
+Started in a terminal with no command, `modelsdb` shows a small menu: start in the background, stop, start in the foreground, status, update the models, add itself to your PATH. The same actions are commands, for scripts and services:
 
 ```bash
-modelsdb start     # start the server in the background, then return
-modelsdb stop      # stop the background server
-modelsdb status    # is it running? on which address?
-modelsdb serve     # run in the foreground (what a service should call)
-modelsdb --help    # list every command and global flag, then exit
-modelsdb --version # print the version, then exit
+modelsdb start        # start the server in the background, then return
+modelsdb stop         # stop the background server
+modelsdb status       # is it running, and on which address?
+modelsdb serve        # run in the foreground (what a service should call)
+modelsdb update       # refresh the catalog without a server
+modelsdb backup DIR   # copy your whole database into folder DIR
+modelsdb backups      # list both kinds of backup
+modelsdb restore FILE # roll the database back to a pre-migration snapshot (stop the server first)
+modelsdb --help       # every command and flag
 ```
 
-`modelsdb --help` (or `-h`) prints the full list of commands and global flags; `modelsdb --version` (or `-v`) prints the version. Both exit without starting a server. An unrecognized command or flag is rejected with an error and a non-zero exit, so a typo can never accidentally start a server on the default directories.
-
-The menu appears **only** when you run it interactively. A non-interactive start (from a service, a pipe, or `nohup modelsdb ... </dev/null`) starts the server directly, so nothing automated has to deal with the menu.
+The menu appears only when you run it interactively; a service or a pipe starts the server directly. An unrecognized command is rejected rather than starting a server by accident. `restore` and `update` refuse to run while a server holds the data folder, whatever port that server listens on, and `backup` refuses only when a migration would have to run under that server.
 
 ## Run from source
 
-You don't need to build anything to try it. With [Go 1.26 or newer](https://go.dev/dl/) installed, run this from the project root:
+With [Go 1.26 or newer](https://go.dev/dl/) installed, from the project root:
 
 ```bash
 go run ./cmd/modelsdb
 ```
 
-As a shortcut, `./start_dev.sh` runs the server from source with no build step (pure source on `./data`, port 8123) in the foreground, so Ctrl-C stops it. To exercise the built binary instead, `./start_dev_binary.sh` runs `./dist/modelsdb` in the foreground on port 8124, pinned to `./data` and isolated from any production install. Those two share the same `./data` folder and PID file, so run only one at a time. `./start_dev_agent.sh` is separate: it pins its dirs to `./.temp-data` and runs on port 8125 with its own database, so it can run *alongside* the others without stopping them - useful when one person (or an agent) needs to restart the server while someone else is using theirs. Its database is seeded from the embedded catalog and holds no personal data; `./.temp-data` is git-ignored and safe to delete. For a shippable binary, use `./build.sh` (it writes `dist/modelsdb.exe` and `dist/modelsdb`).
+Run that way, the app keeps its data under `./data` instead of your user folders. `bash build.sh` writes a shippable `dist/modelsdb.exe` and `dist/modelsdb`.
 
-Each script starts the server directly (no interactive menu) and binds this machine's Tailscale address alongside loopback, then prints that tailnet URL as the link to open - on a phone, or from another computer. **Prefer it over the `127.0.0.1` link when you are not on the machine running the server.** An editor with Remote-SSH (VS Code / Cursor) auto-forwards ports, and the local port number need not match the remote one: if its preferred local port is taken it silently uses the next free number, and old forwards keep listening after their remote process dies. A `127.0.0.1:8123` tab can therefore be wired to a different port - even a different server - than its number suggests. The tailnet URL has no forwarder in the path.
+## What is in the catalog
 
-## What's in the catalog
+**One model is one row, and everything known about it is a cell in a column.** A column is the plain name of the fact it answers, `context_length`, `parameters`, `notes`, and there is exactly one column per fact whoever filled it in.
 
-The catalog starts from the OpenRouter API and is enriched to also cover model types the API does not return on its own, such as image, video, embedding, rerank, and speech models. Each model carries pricing, capabilities, and a Zero Data Retention (ZDR) flag, on top of which you layer your own notes, favorites, and any personal columns you define yourself - a plain text field, or a single-select dropdown of text or number labels (a fresh install already starts with three: Speed, Rating, OCR). Add or remove a column any time from the **Custom columns** button in the filter bar. Your personal annotations live only in your local database and are never written to any shared file. For how all of this is fetched, stored, and derived, see [ARCHITECTURE.md](ARCHITECTURE.md).
+**Who said a value is recorded on the value.** Every cell carries its source: `openrouter`, `huggingface`, `research` (a value found to fill a gap: by an assistant through the API, or by you, in **Add model**, for a model that is brand new to your catalog), `hand` (you, in your own columns), or `app` (the one fact only the app can state, the date a model entered your catalog).
 
-## Refreshing data
+**There are two kinds of column, and the line between them is who writes.** A column OpenRouter states, a repository measures or the app works out is never typed over: an update maintains it, and the page never offers to type into it, whether it holds a value or is empty. Where such a cell is empty it stays that way until OpenRouter or the repository states it, or until it is answered as research - through **Add model**, for a new row, or over the API. Your own columns - the note, the favourite, and every column you make - are written by nobody but you, and no update ever touches them. The **Columns** dialog says which kind every column is.
 
-This section is about pulling fresh model data into the app. A full refresh runs in three steps. The **Update models** button and the CLI run all three. A restart automatically runs only the first one (Catalog).
+**Two sources that disagree keep both answers.** If OpenRouter says a model takes 32,768 tokens of context and its repository says 128,000, both are stored as two cells of the one column. The table shows the answer from the source the column prefers, an order fixed in the app: OpenRouter for what OpenRouter serves, the repository for what it measures. A researched value ranks below both.
 
-- **Catalog**: fetches the OpenRouter API and updates the database, including the ZDR (Zero Data Retention) flag. This runs automatically every time the app starts. See [ARCHITECTURE.md](ARCHITECTURE.md#zdr-derivation).
-- **Collections**: scrapes the OpenRouter collection pages to add model types the API omits (image, video, speech-to-text, text-to-speech, embedding, rerank).
-- **Pricing**: scrapes per-model pricing for those added models, where the unit varies (per image, per second, per megapixel, and so on).
+```mermaid
+flowchart LR
+    OR["OpenRouter says 128,000"] --> C
+    HF["The repository says 32,768"] --> C
+    YOU["Research found 8,192, before either spoke"] --> C
+    C["context_length: three cells, one per source"] --> D["Shown: OpenRouter's, 128,000"]
+```
 
-The header **Update models** button runs all three in the background and shows progress, so a long-running instance can refresh without a restart. Each step is also available as a CLI command.
+A cell says who answered it with a small mark where it matters: a filled dot for your own answer in a column of yours, the source's name where several could have answered, the word Research on a researched value, a red mark where OpenRouter and the repository disagree. Press any of them to see every source's answer and when it was given.
+
+**A model's type says what it produces.** OpenRouter's own output list decides it: chat unless the model gives out images, video, embeddings, reranking scores, speech, transcription or music, and `decisions` for a model whose output is a score for each allowed option instead of text. The next **Update models** corrects the type of rows an earlier version filed as chat.
+
+A fresh install draws a short default set of columns and holds many more behind the **Columns** button. **Added** is one of the hidden ones: the date a model first entered your catalog, stamped once and never rewritten, which is a different date from **Listed on**. You can add columns of your own, which nothing but you ever fills in.
+
+## Adding, editing and removing models
+
+Everything OpenRouter lists arrives on its own. **Add model**, in the menu, covers the rest in two ways: **from a HuggingFace address**, where the server reads the repository itself and records what it states, nothing typed, except how the model is built: that **Architecture** line is written afterwards from the repository's `config.json`, by you or by an assistant following the update procedure; or a **custom model** you fill in by hand. A model already in your catalog can be re-imported from its **Details** dialog, which names what will be rewritten before it sends anything and never touches your note, your star or your own columns.
+
+**A cell can be edited where a source has not already spoken and never where nothing has spoken at all**, in the cell itself or in the row's own form behind the pencil: a column of yours always, and a fetched, measured or worked-out cell only once it already holds a value found by research. An empty one of those stays read-only on the page too, until a source fills it or, for a new row, **Add model** does. `Ctrl`+`Z` undoes single-cell edits while the tab is open.
+
+**Every row carries an eye** that hides the model, and a hidden row carries a crossed-out eye that puts it back. Hiding throws nothing away. **A model OpenRouter lists cannot be deleted**, because the next update would store it again, so its row has no delete control; hide it instead. A row you typed in or imported from HuggingFace can be deleted outright, and that is final: your note, your star and every value you wrote about it go with the row, so the app names what goes before it asks.
+
+**Variations** are downloadable builds of a model. The download icon in the **Var** column records one from its HuggingFace repository, or files a model you already have under this one. ModelsDB downloads nothing: it records where the file is, how big it is and how it is stored. A build is drawn under its parent, tinted as a group, and a mark on its row takes it back out if it was filed under the wrong model.
+
+**Handing the research to an AI assistant is optional.** A **Copy agent brief** button, in the import result and in each model's Details dialog, copies instructions naming that model, the facts it still has no answer for that can apply to that kind of model, and this instance's addresses, so an assistant can look the facts up and post them back.
+
+## Columns
+
+The **Columns** button in the filter panel lists every column with its key beside it. Tick one to draw it. **Rename** changes only the heading; every value follows, because a value names its column by key. **Colours** shades a column's cells by threshold, by yes or no, or by label; the two price columns ship coloured. **Delete** is offered only for a column of your own and removes every model's value for it. **Make a column of your own** takes a heading and a kind of value. Every field the OpenRouter feed carries is already a column: the refresh makes one for each field no shipped column reads, hidden until you tick it, and you can find it by the feed's own name for it as well as by its heading.
+
+## Finding a model
+
+The funnel at the top left opens the filter panel. It builds one control per visible column out of what that column holds: a figure for a number (at most this much for a price), yes, no or empty for a flag, a value list with include and exclude for anything with a fixed set of values (its first row, **Empty**, is the models with no value), a text box otherwise. A **Links** filter in the Where it lives group keeps the models that have an OpenRouter or a HuggingFace link. Beside them sit the search over the model's name (every word must appear, in any order; `"a phrase"`, `!word` to leave a word out, `AND` and `OR` in capitals; the text boxes and value-list searches read the same way), **Hidden**, **Edited by me**, **Variations** and **Hide empty**, which takes out the columns nothing on show has a value in.
+
+**Every filter you set appears in the address bar**, in the same words the API takes, so the address is always a link to these rows. Your column layout stays out of it, because that belongs to your computer.
 
 ## Updating the app itself
 
-This is different from refreshing data above: it replaces the **program binary**
-with a newer release, in place.
+When a newer release exists a banner appears. **Update now** downloads the new binary, verifies it against a signed checksums file and swaps it in beside the running one; **Restart to apply** re-launches into it. The app never restarts on its own. **Automatically download updates**, in the **Info** dialog, downloads and verifies in the background so the banner is ready; restarting is still your click. On a platform with no published asset the banner is a plain download link.
 
-When a newer release exists, a banner appears at the top of the page. On the
-platforms the release publishes (Windows and Linux, both 64-bit Intel/AMD) the
-banner offers **Update now**:
+## Where your data lives
 
-1. **Update now** downloads the new binary, verifies it, and swaps it in next to
-   the running one. Nothing is applied yet.
-2. **Restart to apply** re-launches the app into the new binary. The page shows a
-   brief "reconnecting..." state and reloads once the new version answers.
-
-The app never restarts on its own - applying an update is always your click.
-
-**Automatic download (opt-in).** Open the small **i** (info) button in the header
-and tick **Automatically download updates**. With it on, a newer release is
-downloaded and verified in the background as soon as the daily check finds it, so
-the banner is ready with **Restart to apply** without waiting. Downloading is
-automatic; restarting is still your decision.
-
-**Safety.** Every downloaded binary is verified before it is trusted: the release
-publishes a signed checksums file, and the app checks that signature against a
-public key built into the binary, then matches the download's SHA-256 against it.
-If the signature or hash does not check out, the update is refused and your current
-binary is left untouched. On any platform without a published asset, the banner
-falls back to a plain download link.
-
-## Data locations & configuration
-
-ModelsDB keeps three kinds of files in separate, per-OS standard directories.
-
-| Kind | What | Default location |
+| Kind | What | Default |
 |---|---|---|
-| **config** | `config.jsonc`, `settings.json` | `os.UserConfigDir()/modelsdb` (e.g. `%APPDATA%\modelsdb`, `~/.config/modelsdb`) |
-| **data** | `modelsdb.db` (your data, including personal annotations), `curated.json` (public catalog export), `.backups/` | platform data dir (`%LOCALAPPDATA%\modelsdb\data`, `~/.local/share/modelsdb`, `~/Library/Application Support/modelsdb`) |
-| **cache** | `logs/`, `modelsdb.pid`, `update-check.json` | `os.UserCacheDir()/modelsdb` |
+| **config** | `config.jsonc` | `%APPDATA%\modelsdb`, `~/.config/modelsdb` |
+| **data** | `modelsdb.db` with its `-wal` and `-shm` sidecars, and `.backups/` | `%LOCALAPPDATA%\modelsdb\data`, `~/.local/share/modelsdb`, `~/Library/Application Support/modelsdb` |
+| **cache** | `logs/`, `modelsdb.pid`, `update-check.json`, `backup-schedule.json`, `model-update.json` | the OS cache directory, under `modelsdb` |
 
-These directory names are all lowercase `modelsdb` (the product is styled **ModelsDB** in the UI; the on-disk folders are not). A binary that previously created capitalized `ModelsDB` directories has their contents moved into the lowercase folders once, automatically, the next time it starts.
-
-To put these folders where you want, drop a `config.jsonc` next to the binary (a legacy `config.json` is still read). The simplest version forces everything into the binary's own folder:
+To put them somewhere specific, drop a `config.jsonc` next to the binary. `{"portable": true}` keeps everything in the binary's own folder. Or name each folder, the port and the bind address:
 
 ```jsonc
 {
-  "portable": true
-}
-```
-
-Or point each folder somewhere specific (relative paths resolve from the `config.jsonc`'s own folder):
-
-```jsonc
-{
-  "data_dir": ".",            // or an absolute path, or "data"
-  "cache_dir": ".",           // omit a field to use the OS default for it
-  "port": 8122,               // port to bind; omit to use the default
-  "host": "127.0.0.1",        // bind address; omit to stay loopback (this machine only).
-                              // "tailscale" auto-binds this machine's Tailscale 100.x IP
-  "allow_public": false,      // required to bind 0.0.0.0 or a public address (off by default)
+  "data_dir": ".",            // or an absolute path; omit a field for the OS default
+  "cache_dir": ".",
+  "port": 8122,
+  "host": "127.0.0.1",        // extra bind address; "tailscale" binds this machine's 100.x address
+  "allow_public": false,      // required to bind 0.0.0.0 or a public address
   "upstream": { "owner": "DavidTimar1", "repo": "ModelsDB", "branch": "main" }
 }
 ```
 
-`config.jsonc` is [JSONC](https://en.wikipedia.org/wiki/JSON#JSONC), so you can add `//` comments and trailing commas. The app writes a commented template the first time it runs. If you change folders for an already-running instance, stop it first (`modelsdb stop`, Ctrl-C its foreground window, or close the window).
+The app writes a commented template the first time it runs. The `upstream` block is the fork switch: point it at your own fork and the app checks that repository for releases. Flags and environment variables override the file; `internal/paths/paths.go` is the full order.
 
-The `upstream` block is the **fork switch**: point it at your own fork and the app pulls its catalog and update checks from there instead. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full resolution order, the CLI flags, the environment-variable overrides, and the backup/restore commands.
+**The server answers only to names it knows.** A request whose `Host` is not `localhost`, a loopback address, an address the server bound or the host of an `allowed_origins` entry gets 403. This stops a hostile web page from reaching the server through DNS rebinding. Add an `allowed_origins` entry (a full address such as `https://models.example`) when you reach the app by a machine name, or through a reverse proxy, that the server did not bind itself.
+
+**There is no authentication.** Anyone who can reach a non-loopback address you bind gets full read and write, including the routes that destroy data and the one that replaces the program. The server refuses a public or `0.0.0.0` bind unless you pass `--allow-public`. Prefer a private address, such as `"host": "tailscale"`.
+
+## Backing up your data
+
+Everything is in one file, `modelsdb.db`, in the data folder. That is the only copy, and backing it up is the only protection you have.
+
+```bash
+modelsdb backup /path/to/your/backup/folder
+```
+
+That writes one dated `.db` file, complete on its own, and touches nothing else in the folder. It only reads your database, so you can take one while the app is running. To put one back, stop the app, delete `modelsdb.db-wal` and `modelsdb.db-shm` from the data folder, then rename the backup to `modelsdb.db` there. A stopped app can leave those two files behind, and a backup placed beside them opens as a damaged database.
+
+**If you copy files by hand, copy three together**: `modelsdb.db`, `modelsdb.db-wal` and `modelsdb.db-shm`. The database writes its newest changes into the `-wal` sidecar first, so the main file alone is behind and can be missing whole batches, and the trap is that such a copy still opens perfectly. `modelsdb backup` avoids this entirely.
+
+**Automatic daily backups** are opt-in, in the **Info** dialog: tick the option, name a folder, and once a day the app writes a backup there when the database has changed. `modelsdb backups` and `modelsdb restore` are a different thing: the snapshots the app takes automatically before it changes the shape of the database, kept in its own `.backups` folder and pruned. The backups you take are never deleted by the app.
+
+**The model catalog updates itself once a day** while the app runs. The switch is in the **Info** dialog, under "Daily model update", and it is on until you untick it. It runs the same update as **Update models** but slowly, a request about every second, so it takes around 25 minutes; it shows nothing while it runs, and afterwards an open page offers a **Refresh** button; a failed update is shown in a bar and in the Info dialog, and is tried again within the hour. The app also updates once at every start, and a daily run is due a day after the last update of any kind.
+
+**Upgrading from a 10.x version** needs nothing from you: the new binary carries your database forward, taking a snapshot first and restoring it if anything fails. **A database from ModelsDB 1.29.0 or 1.30.1 is not carried forward automatically**: this version refuses it unchanged, and [docs/migration.md](docs/migration.md) says how to convert it once, by hand, preferably with an AI assistant guiding you.
 
 ## Query API
 
-The server runs on a fixed port, bound to loopback by default, so other local apps and agents can query the catalog over HTTP. No auth, language-agnostic, no process to spawn.
-
-> **Reaching it from another device.** By default the server listens only on `127.0.0.1` (this machine). To open it on another device — a laptop, a phone, another box on your [Tailscale](https://tailscale.com/) tailnet — set `host` in `config.jsonc`. The simplest value is `"tailscale"`: the app finds this machine's Tailscale `100.x` address itself and binds it (if Tailscale is down or not installed, it logs a warning and stays loopback-only). You can also set `host` to a specific address the other device can reach (a `100.x` IP from `tailscale ip -4`, or a LAN IP). The server keeps loopback bound as well, so local tools keep working. **There is no authentication:** anyone who can route to a non-loopback address you bind gets full read/write, including the endpoints that change data and replace the binary. So the server **refuses to bind a public or `0.0.0.0` address** by default — you must pass `--allow-public` (or set `"allow_public": true`, or `MODELSDB_ALLOW_PUBLIC=1`) to acknowledge the exposure. Prefer a private address (Tailscale/VPN/LAN) over a public one.
-
-- `GET /api/models?<filters>` returns a JSON array of matching models, each carrying a `custom_values` object for any personal columns you have defined.
-- `GET /api/custom-columns` returns your personal column definitions (name, type, options).
-- `GET /api` (no query string) returns a markdown usage guide written for an AI agent.
-- `GET /api/health` returns status.
-- `GET /api/paths` returns the on-disk locations this instance resolved at startup.
-- `POST /api/update` starts a full refresh in the background and returns immediately.
-- `GET /api/update/status` returns the current refresh state.
-- `POST /api/app-update/apply` stages a newer app binary (download + verify + swap); `GET /api/app-update/status` reports staging state; `POST /api/app-update/restart` re-launches into a staged binary. These replace the program, not the data.
-
-Filters are optional, AND-combined, and case-insensitive: `name`, `type`, `input`, `output`, `tool=yes`, `reasoning=yes`, `zdr=true|false`, `min_context`, `max_in`, `max_out`, and `fields=` for a projection. Use `all=1` to fetch everything.
+The server runs on a fixed port so other local apps and agents can query the catalog over HTTP. **`GET /api` is the reference**: a markdown guide, written for an agent or any caller, documenting every route and every rule a write obeys, and a test fails if a route is missing from it. The short version:
 
 ```bash
-curl 'http://127.0.0.1:8122/api/models?type=image&output=image'
-curl 'http://127.0.0.1:8122/api/models?name=claude&fields=name,prompt,completion,context_length'
-curl 'http://127.0.0.1:8122/api'   # the agent guide
+# Every column: key, heading, kind of value, and the sources that can answer it.
+curl 'http://127.0.0.1:8122/api/columns'
+
+# The catalog. Filters name a column by key: exactly this, min:, max:, contains:.
+curl 'http://127.0.0.1:8122/api/models?context_length=min:200000&fields=name'
+
+# Writing: values are text. A column of yours takes it as yours; an empty fetched cell takes it as research over this API (the page never offers to); a fetched cell a source has stated refuses it.
+curl -X POST http://127.0.0.1:8122/api/save \
+  -H 'Content-Type: application/json' \
+  -d '[{"name":"OpenAI: GPT-5","cells":{"notes":"handles long diffs well"}}]'
 ```
 
-Pricing note: `prompt` and `completion` are raw USD per token and are empty for non-token models like image, video, and audio. For those, read `price_display` instead.
+A read and a write speak one set of names, so a value read out can be posted straight back. An unknown parameter or key answers 400 and names it; nothing is silently ignored. `GET /api/guide/update-database-manually` serves the procedure for researching a model's missing data by hand.
 
 ## Building and releasing
 
-`bash build.sh` produces `dist/modelsdb.exe` (Windows) and `dist/modelsdb` (Linux). Releases are built automatically by GitHub Actions when a maintainer pushes a `v*` tag that matches the `VERSION` file. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor workflow.
+`bash build.sh` produces `dist/modelsdb.exe` and `dist/modelsdb`.
 
-### Self-update signing (one-time maintainer setup)
+Releases are built by GitHub Actions when a `v*` tag matching `VERSION` is pushed, and are signed on the maintainer's own machine, so no signing key exists in GitHub. The in-app self-update trusts a download only when the release's `SHA256SUMS` file is signed with the key whose public half is in `internal/selfupdate/pubkey.go`. That file also names the release version, and the app refuses a version that is not newer than the running one.
 
-The in-app self-update only trusts a downloaded binary if the release's checksums
-file is signed with the maintainer's key. Set this up once:
+1. Push the tag. The workflow builds a **draft** release holding the two binaries and `SHA256SUMS`. A draft is invisible to the app.
+2. Check the workflow run, then sign and publish on your own machine, logged in with `gh`: `go run ./cmd/sign publish -tag vX.Y.Z -commit <full commit hash> -key <your key file>`, where the hash is the commit the tag points at on GitHub. Publish rebuilds that commit in a sandbox and signs only when the binaries are identical to the draft's, so a binary CI built from anything else is never signed. It runs on Linux with `bubblewrap` installed, because it compiles the commit's code and that code must not see the key. The header of `cmd/sign/main.go` says what it checks. The rebuild gives the same bytes only with the same Go toolchain CI used; `go.mod` pins it with a `toolchain` line, so check `go version` against that line if the hashes differ.
+3. A fork that wants working self-update makes its own key once with `go run ./cmd/sign keygen -seed-out <file outside any git work tree>`. The private seed goes to that file and is never printed. The file is plain text protected only by its mode (0600), with no passphrase, so keep a copy offline: whoever reads it can sign updates for every install, and losing it with no copy means every install must be downloaded by hand again; paste the printed public key into `internal/selfupdate/pubkey.go`.
 
-1. Generate a key pair:
+An install built with an older signing key can no longer verify updates and must be downloaded by hand once.
 
-   ```bash
-   go run ./cmd/sign keygen
-   ```
+## More documents
 
-   It prints a **public** key and a **private** key (both base64). Neither is a
-   password you reuse; the private key only signs releases.
-2. Paste the **public** key into `internal/selfupdate/pubkey.go` as the value of
-   `releasePubKeyB64`, and commit it. (Until this is a real key, self-update
-   refuses by design.)
-3. Add the **private** key as the GitHub repository secret **`MODELSDB_SIGN_KEY`**
-   (Settings -> Secrets and variables -> Actions). Never commit it.
-4. Cut a release as usual (push a `v*` tag). The workflow runs
-   `go run ./cmd/sign sums dist/SHA256SUMS`, which writes `dist/SHA256SUMS.sig`,
-   and uploads it alongside the binaries.
+- [docs/architecture.md](docs/architecture.md), how the data is stored, who may write what, and where the code for each part lives.
+- [docs/design.md](docs/design.md), what the page is made of and the choices that shape it.
+- [docs/migration.md](docs/migration.md), converting a database from ModelsDB 1.29.0 or 1.30.1 to this version, once.
+- [docs/security.md](docs/security.md), what the app reaches and how to report a problem.
+- [docs/contributing.md](docs/contributing.md), how to contribute.
 
-A fork that wants working self-update repeats these steps with its own key pair.
-`cmd/sign` is a helper only; it is not part of the shipped binary and is not built
-by `build.sh`.
+The code is the truth. These are overviews, and `GET /api` on a running server is the API reference.
 
-## License
+## License and contributing
 
-Licensed under the [MIT License](LICENSE). Free to use, copy, modify, and distribute, including commercially, provided the copyright notice is kept. Provided as-is, without warranty.
-
-## Contributing
-
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). Fork the repo, make your change, and open a pull request. To report a security concern, see [SECURITY.md](SECURITY.md).
+Licensed under the [MIT License](LICENSE). Contributions are welcome: see [docs/contributing.md](docs/contributing.md).

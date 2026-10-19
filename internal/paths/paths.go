@@ -1,4 +1,4 @@
-// Package paths - on-disk location resolution.
+// On-disk location resolution.
 //
 // A downloaded binary must store its data somewhere sensible per OS, and a power
 // user must be able to relocate config/data/cache independently. ResolvePaths
@@ -17,22 +17,25 @@
 // MODELSDB_*_DIR env vars set a dir directly, and a config dir's own config.jsonc
 // supplies data_dir/cache_dir/port. This lets a wrapper point the dev server at the
 // same data a shipped build uses.
+
 package paths
 
 import (
 	"encoding/json"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 )
 
-// Upstream identifies the GitHub repo a build pulls its curated catalog and
-// update notifications from. Forks set it in config.json to track their own repo
-// instead of the canonical one.
+// Upstream identifies the GitHub repo a build checks for new releases, and
+// downloads them from when it updates itself. Forks set it in config.json to
+// track their own repo instead of the canonical one.
 type Upstream struct {
 	Owner  string `json:"owner"`
 	Repo   string `json:"repo"`
@@ -52,7 +55,7 @@ func FileExists(p string) bool {
 }
 
 // configNames are the accepted config file base names, in preference order: the
-// canonical config.jsonc first, then a legacy config.json of the same shape.
+// canonical config.jsonc first, then a config.json of the same shape.
 var configNames = []string{"config.jsonc", "config.json"}
 
 // configBase is the config file base name actually in use, resolved at startup to
@@ -95,6 +98,24 @@ type fileConfig struct {
 	Host        string    `json:"host,omitempty"`         // extra bind address (a Tailscale 100.x IP, a private IP, or "tailscale" to auto-detect this machine's Tailscale IP); ""/absent => DefaultHost (loopback only)
 	AllowPublic bool      `json:"allow_public,omitempty"` // permit binding 0.0.0.0 or any public address (off by default; a public bind is refused without it)
 	Upstream    *Upstream `json:"upstream,omitempty"`
+
+	// AllowedOrigins names extra addresses this install is legitimately reached
+	// at (an HTTPS reverse-proxy name, typically), beyond the address the
+	// request's own Host header already satisfies. Read once at startup by
+	// resolveAllowedOrigins and consumed by originAllowed (internal/app/server.go)
+	// and servedHost (internal/app/brief.go). Never accepted over HTTP - see
+	// resolveAllowedOrigins.
+	AllowedOrigins []string `json:"allowed_origins,omitempty"`
+
+	// The daily backup: whether it runs, the folder it writes into, and whether
+	// it replaces one file instead of writing a new dated one. These three sit
+	// here, and not in the database, because a restore copies a chosen backup
+	// over the live database: a destination stored inside that file would be
+	// silently repointed by an action taken to recover data, and could carry one
+	// machine's folder onto another that has no such folder.
+	BackupEnabled   bool   `json:"backup_enabled,omitempty"`
+	BackupDir       string `json:"backup_dir,omitempty"`
+	BackupOverwrite bool   `json:"backup_overwrite,omitempty"`
 }
 
 // CLI directory overrides (populated by ParseGlobalFlags); highest precedence.
@@ -195,11 +216,21 @@ func ParseGlobalFlags(args []string) (rest, unknown []string) {
 	return rest, unknown
 }
 
-// isDevRun reports whether this is a `go run` build (its temp exe lives under a
-// go-build cache / the OS temp dir), in which case paths stay under ./data.
-func isDevRun() bool {
-	p := strings.ToLower(ExePath)
-	return strings.Contains(p, "go-build") || strings.Contains(p, string(filepath.Separator)+"temp"+string(filepath.Separator)) || strings.Contains(p, "/temp/")
+// isDevRun reports whether this is a `go run` build, whose executable lives in a
+// go-build folder of the Go build cache. A folder named Temp is not evidence: a
+// downloaded binary run from there is an installed program and keeps its data in
+// the OS default folders.
+func isDevRun() bool { return isGoBuildPath(ExePath) }
+
+// isGoBuildPath reports whether any folder of path is a go-build cache folder,
+// splitting on both separators so a Windows path is read the same on any host.
+func isGoBuildPath(p string) bool {
+	for _, part := range strings.FieldsFunc(strings.ToLower(p), func(r rune) bool { return r == '/' || r == '\\' }) {
+		if strings.HasPrefix(part, "go-build") {
+			return true
+		}
+	}
+	return false
 }
 
 // osDefaultDirs returns the OS-standard config/data/cache directories for the
@@ -234,10 +265,10 @@ func osDefaultDirs() (config, data, cache string) {
 	return
 }
 
-// migrateLegacyDirs renames each OS-default directory left by an older build
-// (capitalized leaf, legacyAppName) forward to the current lowercase leaf, so an
-// existing install's config/data/cache is not orphaned. It is a no-op for any
-// dir that has already migrated or was never capitalized.
+// migrateLegacyDirs renames each OS-default directory that carries the
+// capitalized leaf (legacyAppName) to the lowercase leaf, so an install made by
+// an early build is not orphaned. It is a no-op for any dir that has already
+// been renamed or was never capitalized.
 func migrateLegacyDirs(dirs ...string) {
 	for _, d := range dirs {
 		migrateLegacyDir(d)
@@ -295,6 +326,9 @@ func resolveRel(base, p string) string {
 	}
 }
 
+// FirstNonEmpty answers the first of vals that is not the empty string, or "" when
+// every one is empty. It is how the directory cascade lets the first source that
+// names a value win.
 func FirstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if v != "" {
@@ -403,12 +437,19 @@ func dropTrailingCommas(src []byte) []byte {
 
 // SaveConfigFile persists AppConfig to ConfigFile (creating the config dir). It
 // writes the config as JSONC: a comment header documenting every option, then the
-// JSON body. The app only writes this on first run, so comments a user adds
-// afterward are left untouched.
+// JSON body.
+//
+// IT REWRITES THE WHOLE FILE from the struct, so a comment the user added and a
+// field this struct does not model do not survive it. That cost is accepted:
+// first run writes the file, and so does saving the backup controls in the Info
+// dialog, which is the one setting a person changes through the app that has to
+// stay outside the database.
 func SaveConfigFile() error {
 	if ConfigFile == "" {
 		return nil
 	}
+	configMu.Lock()
+	defer configMu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(ConfigFile), 0755); err != nil {
 		return err
 	}
@@ -418,7 +459,34 @@ func SaveConfigFile() error {
 	}
 	out := append([]byte(configHeader), b...)
 	out = append(out, '\n')
-	return os.WriteFile(ConfigFile, out, 0644)
+	return WriteFileAtomic(ConfigFile, out, 0644)
+}
+
+// configMu guards the backup fields of AppConfig, which are the only ones
+// written after startup: the backup scheduler reads them on its own goroutine
+// while an HTTP handler may be saving what the Info dialog holds.
+var configMu sync.Mutex
+
+// BackupSettings reports the daily backup's configuration: whether it runs, the
+// destination folder, and whether it replaces one file each time. They are read
+// from memory rather than from config.jsonc, so a hand edit of that file takes
+// effect on the next start, exactly like the port and the host.
+func BackupSettings() (enabled bool, dir string, overwrite bool) {
+	configMu.Lock()
+	defer configMu.Unlock()
+	return AppConfig.BackupEnabled, AppConfig.BackupDir, AppConfig.BackupOverwrite
+}
+
+// SaveBackupSettings records the daily backup's configuration and persists
+// config.jsonc. The whole file is rewritten from the struct - see
+// SaveConfigFile.
+func SaveBackupSettings(enabled bool, dir string, overwrite bool) error {
+	configMu.Lock()
+	AppConfig.BackupEnabled = enabled
+	AppConfig.BackupDir = dir
+	AppConfig.BackupOverwrite = overwrite
+	configMu.Unlock()
+	return SaveConfigFile()
 }
 
 // ResolvePaths runs the cascade described in the package doc, loads the config file,
@@ -432,13 +500,12 @@ func ResolvePaths() error {
 	exeDir := filepath.Dir(ExePath)
 
 	if isDevRun() {
-		// Development (`go run`): default everything to ./data, which is already
-		// git-ignored except curated.json, so the maintainer's curated.json
-		// round-trips and the working tree stays clean. An EXPLICIT override still
-		// wins, so a wrapper can point the dev server at a different config/data/
-		// cache: --config-dir/--data-dir/--cache-dir or MODELSDB_*_DIR set the dir
-		// directly, and a config dir's own config.jsonc supplies data_dir/cache_dir/
-		// port/upstream. No config file is written in dev.
+		// Development (`go run`): default everything to ./data, which is entirely
+		// git-ignored, so a dev run keeps the working tree clean. An EXPLICIT
+		// override still wins, so a wrapper can point the dev server at a different
+		// config/data/cache: --config-dir/--data-dir/--cache-dir or MODELSDB_*_DIR
+		// set the dir directly, and a config dir's own config.jsonc supplies
+		// data_dir/cache_dir/port/upstream. No config file is written in dev.
 		cwd, _ := os.Getwd()
 		base := filepath.Join(cwd, "data")
 		DirName = cwd
@@ -450,6 +517,7 @@ func ResolvePaths() error {
 		resolvePort()
 		resolveHost()
 		resolveAllowPublic()
+		resolveAllowedOrigins()
 
 		DataDir = FirstNonEmpty(flagDataDir, os.Getenv("MODELSDB_DATA_DIR"), resolveRel(ConfigDir, AppConfig.DataDir))
 		if DataDir == "" {
@@ -467,12 +535,12 @@ func ResolvePaths() error {
 	DirName = exeDir
 	osCfg, osData, osCache := osDefaultDirs()
 
-	// Rename any directory an older build created under the capitalized leaf to
-	// the current lowercase leaf, so an existing install's data is not orphaned.
+	// Rename any directory created under the capitalized leaf to the lowercase
+	// leaf, so that install's data is not orphaned.
 	migrateLegacyDirs(osCfg, osData, osCache)
 
-	// 1. CONFIG dir. A config.jsonc (or legacy config.json) next to the exe puts the
-	// app in portable mode.
+	// 1. CONFIG dir. A config.jsonc (or config.json) next to the exe puts the app
+	// in portable mode.
 	portable := flagPortable
 	ConfigDir = FirstNonEmpty(flagConfigDir, os.Getenv("MODELSDB_CONFIG_DIR"))
 	if ConfigDir == "" {
@@ -483,7 +551,7 @@ func ResolvePaths() error {
 		}
 	}
 
-	// 2. Load the config file (config.jsonc preferred, legacy config.json) from the
+	// 2. Load the config file (config.jsonc preferred, then config.json) from the
 	// resolved config dir.
 	configBase = resolveConfigBase(ConfigDir)
 	var found bool
@@ -495,6 +563,7 @@ func ResolvePaths() error {
 	resolvePort()
 	resolveHost()
 	resolveAllowPublic()
+	resolveAllowedOrigins()
 
 	// 3. DATA dir, 4. CACHE dir.
 	DataDir = FirstNonEmpty(flagDataDir, os.Getenv("MODELSDB_DATA_DIR"), resolveRel(ConfigDir, AppConfig.DataDir))
@@ -527,7 +596,7 @@ func ifPortable(portable bool, yes, no string) string {
 	return no
 }
 
-// applyUpstream resolves the upstream repo (catalog pull + update check) with the
+// applyUpstream resolves the upstream repo (update check + self-update) with the
 // same first-hit-wins spirit as the other settings: start from the default, let a
 // config.json "upstream" block replace it, then let MODELSDB_UPSTREAM_OWNER /
 // _REPO / _BRANCH env vars override individual fields for a single run (no file
@@ -623,6 +692,107 @@ func resolveAllowPublic() {
 	if flagAllowPublic {
 		AllowPublic = true
 	}
+}
+
+// resolveAllowedOrigins resolves the extra addresses originAllowed treats as
+// this install's own page, with the same first-hit-wins spirit as the other
+// settings: MODELSDB_ALLOWED_ORIGINS (comma-separated) REPLACES config.jsonc
+// "allowed_origins" entirely rather than adding to it, giving a test a way to
+// set the list without writing a config file. There is no --port/--host style
+// flag: nothing needs to forward this to a spawned child.
+//
+// THIS IS THE ONLY PLACE THE LIST IS READ. It is read once, like Port and
+// Host, and never accepted over HTTP - a caller that can already reach this
+// port with no Origin header (curl, a script) could otherwise add its own
+// origin to the list and drive every write route through the reader's browser.
+//
+// A malformed entry is dropped with a warning naming it and never widens the
+// list; the rest of the list still applies and the app still starts.
+func resolveAllowedOrigins() {
+	raw := AppConfig.AllowedOrigins
+	if env := strings.TrimSpace(os.Getenv("MODELSDB_ALLOWED_ORIGINS")); env != "" {
+		raw = strings.Split(env, ",")
+	}
+	AllowedOrigins = []string{}
+	AllowedOriginsDropped = 0
+	for _, entry := range raw {
+		norm, ok, reason := normalizeOrigin(entry)
+		if !ok {
+			log.Printf("Warning: ignoring invalid allowed_origins entry %q in config.jsonc (%s); fix or remove it and restart", entry, reason)
+			AllowedOriginsDropped++
+			continue
+		}
+		AllowedOrigins = append(AllowedOrigins, norm)
+	}
+}
+
+// normalizeOrigin parses raw as one allowed_origins entry and returns it in
+// canonical form: lower-cased scheme and host, with the scheme's default port
+// (80 for http, 443 for https) made explicit when raw carries none, and a
+// single trailing slash stripped. ok is false, with reason naming the rule
+// broken, when raw is not exactly a scheme, a host, and an optional port - no
+// wildcard, no path, no query, no fragment, no userinfo, no bare host with no
+// scheme. Matching this value is later done by exact string equality only, so
+// nothing here may widen what one entry can mean.
+func normalizeOrigin(raw string) (norm string, ok bool, reason string) {
+	if strings.ContainsAny(raw, " \t\n\r*") {
+		return "", false, "not a valid origin"
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", false, "not a valid origin"
+	}
+	if u.Scheme == "" {
+		return "", false, "no scheme"
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", false, "scheme must be http or https"
+	}
+	if u.User != nil {
+		return "", false, "has userinfo"
+	}
+	if u.RawQuery != "" {
+		return "", false, "has a query"
+	}
+	if u.Fragment != "" {
+		return "", false, "has a fragment"
+	}
+	if u.Path != "" && u.Path != "/" {
+		return "", false, "has a path"
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return "", false, "not a valid origin"
+	}
+	port := u.Port()
+	if port == "" {
+		if scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	return scheme + "://" + host + ":" + port, true, ""
+}
+
+// OriginListed reports whether raw - a request's Origin header value - names
+// one of the extra addresses in AllowedOrigins. raw is normalized the same
+// way a config entry is (see normalizeOrigin), so a scheme or port mismatch
+// never matches and neither does a malformed value; comparison against
+// AllowedOrigins is then exact string equality, never Contains, HasPrefix, or
+// HasSuffix, so a suffix of a listed address never matches.
+func OriginListed(raw string) bool {
+	norm, ok, _ := normalizeOrigin(raw)
+	if !ok {
+		return false
+	}
+	for _, a := range AllowedOrigins {
+		if a == norm {
+			return true
+		}
+	}
+	return false
 }
 
 // isTruthy reports whether v is one of the accepted true words ("1", "true",
@@ -722,13 +892,13 @@ func classifyIP(ip net.IP) string {
 
 func finalizePaths() {
 	DbFile = filepath.Join(DataDir, "modelsdb.db")
-	CuratedJsonFile = filepath.Join(DataDir, "curated.json")
 	BackupsDir = filepath.Join(DataDir, ".backups")
-	SettingsJsonFile = filepath.Join(ConfigDir, "settings.json")
 	ConfigFile = filepath.Join(ConfigDir, configBase)
 	LogsDir = filepath.Join(CacheDir, "logs")
 	PidFile = filepath.Join(CacheDir, "modelsdb.pid")
 	UpdateCacheFile = filepath.Join(CacheDir, "update-check.json")
+	BackupScheduleCacheFile = filepath.Join(CacheDir, "backup-schedule.json")
+	ModelUpdateCacheFile = filepath.Join(CacheDir, "model-update.json")
 }
 
 func makeDirs() error {

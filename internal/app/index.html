@@ -10,232 +10,1001 @@
 <script>
 (function(){try{var t=localStorage.getItem('theme');if(t!=='light'&&t!=='dark'){t=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();
 </script>
+<!-- The phone text size, applied before first paint for the same reason. The
+     step is only drawn on a phone (style.css); storage failing leaves normal. -->
+<script>
+(function(){try{var z=localStorage.getItem('modelsdb.text_size');if(z==='larger'||z==='largest'){document.documentElement.setAttribute('data-text-size',z);}}catch(e){}})();
+</script>
+<!-- How many times wider than the screen the browser laid the page out, as
+     --glass on <html>, before first paint. Chrome's Desktop site mode lays a
+     phone out at 980 CSS px, and a zoom under 100% at more than the screen, so
+     the touch rules in style.css multiply their sizes by it to read the same size
+     on the glass. A touch screen only, and 1 where the two widths agree (a real
+     tablet), so nothing scales there. app.js calls this again on a resize. -->
+<script>
+window.setGlassScale = function(){try{var w=window.innerWidth,s=window.screen.width,g=1;if(window.matchMedia&&window.matchMedia('(pointer: coarse)').matches&&s>0&&w>s*1.02){g=Math.round(w/s*1000)/1000;}document.documentElement.style.setProperty('--glass',String(g));}catch(e){}};
+window.setGlassScale();
+</script>
 <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
 <link rel="stylesheet" href="/static/datatables.min.css">
+<link rel="stylesheet" href="/static/fixedHeader.dataTables.min.css">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+<!-- The top bar holds the view button and the funnel that toggles the filter
+     panel (far left, badge counting the filters set), the title, and the right
+     cluster - the database dot, the theme toggle and the menu button. The title
+     reads as centered because the two side zones share the bar's leftover width
+     equally (see .topbar-side in style.css). Every action other than these lives
+     in the menu.
+
+     Below 1642px the funnel is not drawn and the title is not painted: the sort
+     bar's Filters button opens the same drawer and carries the same badge, so
+     the narrow bar holds the view button and the three icons on the right. -->
 <div id="topbar">
+  <div class="topbar-side topbar-left">
+    <!-- Which arrangement of the table is on screen, and the way to another
+         one. It is the one control in the bar that carries information rather
+         than an action, and app.js writes its name, its aria-label and its
+         title on every switch and rename. -->
+    <button id="view-btn" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="view-panel">
+      <span id="view-btn-name"></span>
+      <svg class="view-caret" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+    <button id="btn-funnel" class="btn-funnel" type="button" aria-expanded="true" aria-controls="filter-panel" aria-label="Filters" title="Show or hide the filter panel">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5z"/></svg>
+      <span id="filters-count" class="filters-count" hidden>0</span>
+    </button>
+    <!-- The views, as a NON-MODAL dialog and never an ARIA menu: it holds a text
+         input while a view is renamed and a two-button confirm while one is
+         deleted, and neither of those is a menu entry. app.js wires Escape, the
+         outside click, the Tab that leaves it, and where the focus lands at
+         every step. A dropdown under the button on a wide screen; a sheet
+         pinned to the bottom of a narrow one, where the close button is the
+         thumb's way out. -->
+    <div id="view-panel" role="dialog" aria-labelledby="view-panel-title" hidden>
+      <div class="view-panel-head">
+        <h2 id="view-panel-title">Views</h2>
+        <button id="view-panel-close" type="button" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <!-- One button per view, two lines each: its name, and what it holds. The
+           second line is what tells two views apart three weeks later, because
+           every other thing about a view is saved the moment it changes. -->
+      <ul id="view-list"></ul>
+      <!-- One strip per view deleted in this page's life, newest first. It is
+           the only way back from a delete, it lasts as long as the page does,
+           and it survives this panel being closed and opened again. -->
+      <div id="view-undos"></div>
+      <!-- Why a control here is refused, in text: a disabled button cannot be
+           focused, so a title on one is unreachable by keyboard and invisible on
+           a touch screen. It also carries the rename refusals. -->
+      <p id="view-panel-msg" role="status"></p>
+      <div id="view-actions">
+        <button id="view-new" type="button" aria-label="New view">New</button>
+        <button id="view-duplicate" type="button">Duplicate</button>
+        <button id="view-rename" type="button">Rename</button>
+        <button id="view-delete" class="btn-danger" type="button">Delete</button>
+      </div>
+    </div>
+  </div>
   <h1>ModelsDB</h1>
-  <span id="app-version" title="Installed version"></span>
-  <button id="btn-update" class="btn-update" title="Refresh the model catalog from OpenRouter (catalog, collections, pricing). This does NOT update the app itself.">Update models</button>
-  <button id="btn-paths" class="btn-info" title="Show where ModelsDB stores its data, config and cache files">i</button>
-  <a id="gh-link" class="btn-gh" href="https://github.com/DavidTimar1/ModelsDB" target="_blank" rel="noopener" title="View ModelsDB on GitHub" aria-label="View ModelsDB on GitHub">
-    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.65 7.65 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path></svg>
-  </a>
-  <button id="btn-theme" class="btn-theme" type="button" title="Toggle light/dark theme" aria-label="Toggle light/dark theme">
-    <span class="icon-moon" aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M6.2 1.4a6.6 6.6 0 1 0 8.4 8.4A5.2 5.2 0 0 1 6.2 1.4z"></path></svg></span>
-    <span class="icon-sun" aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16"><g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="3.1"></circle><path d="M8 1v1.8M8 13.2V15M1 8h1.8M13.2 8H15M3 3l1.3 1.3M11.7 11.7L13 13M13 3l-1.3 1.3M4.3 11.7L3 13"></path></g></svg></span>
-  </button>
-  <div id="db-status" title="Database connection status"></div>
+  <div class="topbar-side topbar-right">
+    <div id="db-status" title="Database connection status"></div>
+    <!-- Touch screens showing cards only (hidden by default, drawn by the touch
+         rules in style.css): steps the text size normal, larger, largest, normal. app.js
+         writes the name and keeps the step. -->
+    <button id="btn-textsize" class="btn-textsize" type="button" aria-label="Text size: normal. Press for larger." title="Text size: normal. Press for larger."><span aria-hidden="true">Aa</span></button>
+    <button id="btn-theme" class="btn-theme" type="button" title="Toggle light/dark theme" aria-label="Toggle light/dark theme">
+      <span class="icon-moon" aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M6.2 1.4a6.6 6.6 0 1 0 8.4 8.4A5.2 5.2 0 0 1 6.2 1.4z"></path></svg></span>
+      <span class="icon-sun" aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16"><g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="3.1"></circle><path d="M8 1v1.8M8 13.2V15M1 8h1.8M13.2 8H15M3 3l1.3 1.3M11.7 11.7L13 13M13 3l-1.3 1.3M4.3 11.7L3 13"></path></g></svg></span>
+    </button>
+    <button id="btn-menu" class="btn-menu" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="topbar-menu" aria-label="Menu" title="Menu">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+    <!-- The menu itself: a real ARIA menu (app.js wires the arrow keys, Home/End,
+         Escape, and the outside click). The three buttons keep the ids their
+         handlers are bound to; GitHub is a plain link opening in a new tab. tabindex="-1" keeps the
+         entries out of the page's tab order - the menu button is the one stop,
+         and the arrow keys move within. -->
+    <div id="topbar-menu" role="menu" aria-labelledby="btn-menu" hidden>
+      <button id="btn-add-model" class="menu-item" role="menuitem" type="button" tabindex="-1" title="Add a model that is not in your catalog: from a HuggingFace address, or as a custom row you fill in yourself.">+ Add model</button>
+      <button id="btn-update" class="menu-item" role="menuitem" type="button" tabindex="-1" title="Store every model OpenRouter lists and refresh what it states about the ones you hold. It does NOT update the app itself.">Update models</button>
+      <button id="btn-paths" class="menu-item" role="menuitem" type="button" tabindex="-1" title="Show where ModelsDB stores its data, config and cache files, and check for updates">Info</button>
+      <a class="menu-item" role="menuitem" tabindex="-1" href="https://github.com/DavidTimar1/ModelsDB" target="_blank" rel="noopener" title="View ModelsDB on GitHub (new tab)">GitHub</a>
+    </div>
+  </div>
 </div>
 
 <!-- Mobile-only sort + direction bar (hidden on desktop via CSS). It drives the
-     same DataTables order as a desktop header click. One <option> per custom
-     column is appended by app.js after it fetches the column definitions. -->
+     same DataTables order as a desktop header click. The field list is one
+     <option> per VISIBLE column, appended by app.js from the column list the
+     server sends - there is no fixed set to write here, because a column can be
+     created, hidden or renamed at any time. -->
 <div id="mobile-sortbar">
-  <button id="btn-filters" class="btn-filters-toggle" type="button" title="Show filters">Filters</button>
+  <button id="btn-filters" class="btn-filters-toggle" type="button" title="Show filters" aria-expanded="false" aria-controls="filter-panel" aria-label="Filters">Filters<span id="filters-count-m" class="filters-count" hidden>0</span></button>
   <span id="model-count-m" class="model-count" title="Models shown of total"></span>
   <label class="msb-sort">
     <span>Sort</span>
-    <select id="m_sort">
-      <option value="name">Name</option>
-      <option value="created_at">Date</option>
-      <option value="context_length">Context</option>
-      <option value="parameters">Params</option>
-      <option value="disk_size_gb">Size</option>
-      <option value="prompt">In $</option>
-      <option value="completion">Out $</option>
-    </select>
+    <select id="m_sort"></select>
   </label>
   <button id="m_sort_dir" type="button" data-dir="asc" title="Toggle sort direction" aria-label="Toggle sort direction">&#8593;</button>
 </div>
 
+<!-- Every bar below sits in this one box, which is what sticks to the top of the
+     screen, so two bars showing together stack one under the other when the page
+     scrolls instead of lying on top of each other. -->
+<div id="banner-stack">
 <div id="update-banner">
   <span id="update-banner-text"></span>
   <button id="app-update-now" class="update-action" type="button" style="display:none">Update now</button>
   <button id="app-update-restart" class="update-action" type="button" style="display:none">Restart to apply</button>
   <span id="app-update-progress"></span>
-  <button class="update-dismiss" id="update-dismiss" title="Dismiss">&times;</button>
+  <button class="update-dismiss" id="update-dismiss" type="button" title="Dismiss" aria-label="Dismiss">&times;</button>
 </div>
 
+<!-- What the last update brought in. An update stores every model OpenRouter
+     lists, so the models new to this catalog arrive with the rest and nothing
+     on the table says which they are. app.js writes this bar from the count the
+     update reports, and its action is the way to look at them: it shows the
+     Added column and sorts the table by it, newest first. -->
+<div id="models-added-banner" role="status">
+  <span id="models-added-text"></span>
+  <button id="models-added-show" class="update-action" type="button">Show them, newest first</button>
+  <button class="update-dismiss" id="models-added-dismiss" type="button" title="Dismiss" aria-label="Dismiss this notice">&times;</button>
+</div>
+
+<!-- A model update finished that this page did not start, or the last one
+     failed. app.js fills it from the run record GET /api/update/status carries
+     and shows it with the Refresh button, which reloads the page ONLY when
+     pressed, or with Open Info after a failure. It is never shown for a run this
+     page started itself, and nothing is shown while a scheduled run is in
+     progress. -->
+<div id="catalog-updated-banner" role="status">
+  <span id="catalog-updated-text"></span>
+  <button id="catalog-updated-refresh" class="update-action" type="button">Refresh</button>
+  <button id="catalog-updated-info" class="update-action" type="button">Open Info</button>
+  <button class="update-dismiss" id="catalog-updated-dismiss" type="button" title="Dismiss" aria-label="Dismiss this notice">&times;</button>
+</div>
+
+<!-- Three bars about the stored view, drawn like the update banner above and
+     shown by app.js when there is something to say.
+
+     The first is the one-time word that this version did not carry an older
+     install's settings file across. The server keeps that notice as a row of its
+     own until it is dismissed, so closing it is a decision that survives a
+     reload rather than a thing this page forgets.
+
+     The second says the view could not be READ, and the third that it could not
+     be WRITTEN, which is why the page has stopped saving in either case. They
+     offer a reload and NOT a dismissal on purpose: dismissed either would leave
+     somebody arranging a table that is not being remembered. -->
+<div id="settings-notice">
+  <span>ModelsDB now keeps your view in its database instead of a settings file, and the old file was not carried across. Your models, ratings and notes are untouched. Two things are worth setting again in <strong>Info</strong>: your <strong>daily backup</strong> and its destination folder, which is off until you do, and whether updates download automatically.</span>
+  <button class="update-dismiss" id="settings-notice-dismiss" type="button" title="Dismiss" aria-label="Dismiss">&times;</button>
+</div>
+
+<!-- The daily backup is on and its last attempt failed. app.js shows it from
+     GET /api/backup/status and takes it down when a later attempt succeeds, so
+     it has no dismiss control. The button opens Info, where the destination is
+     set. -->
+<div id="backup-failing-banner" role="status">
+  <span id="backup-failing-text"></span>
+  <button id="backup-failing-info" class="update-action" type="button">Open Info</button>
+</div>
+
+<div id="settings-read-failed">
+  <span>Your saved view could not be read, so nothing you change here is being remembered. Reload to try again.</span>
+  <button id="settings-read-reload" class="update-action" type="button">Reload</button>
+</div>
+
+<div id="view-not-stored">
+  <span>Your saved view could not be stored, so nothing you change here is being remembered. Reload to try again.</span>
+  <button id="view-not-stored-reload" class="update-action" type="button">Reload</button>
+</div>
+</div>
+
+<main id="main-content">
 <div id="filters-backdrop"></div>
 
-<div class="filters filters-container">
+<!-- The filter panel. Every filter here NAMES A COLUMN BY ITS KEY and is answered
+     by the server, which is the one place the grammar of a query lives - so the
+     address bar carries the same parameters the API takes and a link is a query
+     somebody can read.
+
+     On a wide screen it DOCKS on the left and the table shrinks beside it; on a
+     narrow one it is an off-canvas drawer. Open or
+     closed on a wide screen is remembered per computer (filters_open, stored
+     with the rest of your view); the drawer always starts closed.
+
+     There is no fixed list of filters, and that is the point: app.js builds one
+     control per VISIBLE column out of what that column holds, grouped into
+     collapsible sections, one per domain group (DOMAIN_SECTIONS in app.js). A
+     column created, hidden or renamed
+     at any moment changes the panel with it. The controls written out below are
+     the ones that name no column - the search over the model's own name, which
+     of the models you have hidden are drawn, and whether a model has any
+     variations - so they sit above the sections. -->
+<div id="filter-panel" class="filters filters-container">
   <button id="filters-close" class="filters-close" type="button" aria-label="Close filters" title="Close filters">&times;</button>
   <div class="filters-row">
-  <button id="btn-undo" class="btn-history" type="button" title="Undo the last data edit (Ctrl+Z). Session-only: cleared on reload." aria-label="Undo last data edit" disabled>&#x21B6; Undo</button>
-  <button id="btn-redo" class="btn-history" type="button" title="Redo the last undone data edit (Ctrl+Shift+Z). Session-only: cleared on reload." aria-label="Redo data edit" disabled>&#x21B7; Redo</button>
+  <div class="flt-actions">
+  <button id="btn-undo" class="btn-history" type="button" title="Undo the last edit (Ctrl+Z). This session only: cleared on reload." aria-label="Undo last edit" disabled>&#x21B6; Undo</button>
+  <button id="btn-redo" class="btn-history" type="button" title="Redo the last undone edit (Ctrl+Shift+Z). This session only: cleared on reload." aria-label="Redo edit" disabled>&#x21B7; Redo</button>
 
-  <input type="text" id="f_search" placeholder="Search name/desc/notes..." class="filter-input">
-
-  <select id="f_year" multiple class="cdd-native"></select>
-
-  <select id="f_hf" class="filter-select">
-    <option value="">HF Link: All</option>
-    <option value="yes">Yes</option>
-    <option value="no">No</option>
-  </select>
-
-  <select id="f_or" class="filter-select">
-    <option value="">OpenRouter: All</option>
-    <option value="yes">Yes</option>
-    <option value="no">No</option>
-  </select>
-
-  <input type="number" id="f_context" placeholder="Min Context (k)..." class="filter-input w-130">
-  <input type="number" id="f_max_in" placeholder="Max In $..." step="any" min="0" class="filter-input w-110">
-  <input type="number" id="f_max_out" placeholder="Max Out $..." step="any" min="0" class="filter-input w-110">
-  <input type="number" id="f_min_params" placeholder="Min Params (B)..." step="any" min="0" class="filter-input w-130">
-  <input type="number" id="f_min_active" placeholder="Min Active (B)..." step="any" min="0" class="filter-input w-130">
-  <input type="number" id="f_max_size" placeholder="Max Size (GB)..." step="any" min="0" class="filter-input w-130">
-
-  <select id="f_in" multiple class="cdd-native">
-    <option value="text">text</option><option value="image">image</option><option value="audio">audio</option><option value="video">video</option><option value="file">file</option>
-  </select>
-
-  <select id="f_out" multiple class="cdd-native">
-    <option value="text">text</option><option value="image">image</option><option value="audio">audio</option><option value="video">video</option><option value="file">file</option>
-  </select>
-
-  <label class="filters-label">⭐ Favorites
-    <select id="f_fav" class="filter-select-sm">
-      <option value="">All</option><option value="yes">Favorites only</option>
-    </select></label>
-  <label class="filters-label">🧠 Thinking
-    <select id="f_thinking" class="filter-select-sm">
-      <option value="">All</option><option value="yes">Yes</option><option value="no">No</option>
-    </select></label>
-  <label class="filters-label">🔧 Tool
-    <select id="f_tool" class="filter-select-sm">
-      <option value="">All</option><option value="yes">Yes</option><option value="no">No</option>
-    </select></label>
-  <label class="filters-label">🕸️ MoE
-    <select id="f_moe" class="filter-select-sm">
-      <option value="">All</option><option value="yes">Yes</option><option value="no">No</option>
-    </select></label>
-  <label class="filters-label">🗒️ Notes
-    <select id="f_has_notes" class="filter-select-sm">
-      <option value="">All</option><option value="yes">Has notes</option><option value="no">No notes</option>
-    </select></label>
-  <label class="filters-label">🔒 ZDR
-    <select id="f_zdr" class="filter-select-sm">
-      <option value="">All</option><option value="yes">Yes</option><option value="no">No</option>
-    </select></label>
-  <label class="filters-label">💲 Unit
-    <select id="f_measurement" class="filter-select-sm">
-      <option value="">All</option>
-    </select></label>
-
-  <!-- One filter control per custom column, built and rebuilt by app.js from
-       GET /api/custom-columns (there is no fixed set to hardcode here - columns
-       are created/deleted at runtime). display:contents (style.css) lets the
-       generated controls flow as direct children of .filters-row. -->
-  <div id="cc-filters"></div>
-
-  <button id="color-btn" class="btn-colors" title="Set the In $/Out $ cell colour thresholds for each pricing unit">🎨 Colors</button>
-  <div id="col-toggle" class="col-toggle">
-    <button id="col-toggle-btn" type="button" class="btn-colors" title="Show or hide table columns">🧬 Columns</button>
-    <div id="col-toggle-panel" class="col-toggle-panel"></div>
-  </div>
-  <button id="cc-manage-btn" type="button" class="btn-colors" title="Create or delete your own personal columns (text, or a single-select dropdown)">➕ Custom columns</button>
+  <button id="col-toggle-btn" type="button" class="btn-colors" title="Every column this catalog holds: what each one is and who writes it, show or hide one, set the left-to-right order, change what it is called, make one of your own, or delete one of yours">&#129516; Columns</button>
   <button id="f_clear" class="btn-clear">Clear</button>
-  <span id="model-count" class="model-count" title="Models shown of total"></span>
+  </div>
+
+  <input type="text" id="f_search" placeholder="Search names (!no, &quot;a phrase&quot;, OR)" title="Every word must appear, in any order. &quot;quoted phrase&quot;, !word to exclude, AND, OR (capitals)." class="filter-input">
+
+  <!-- Off by default, so nobody's screen changes until they opt in. On, every
+       long text value (Notes, a text column of your own) renders
+       in full rather than cut at a character count - the only limit left is
+       the width of the cell it is in (see body.full-text in style.css and
+       clipHtml in app.js). Stored with the rest of the view exactly as Hide
+       empty is: out of the address, untouched by Clear, since it is a layout
+       preference and not a statement about which rows are wanted. -->
+  <label class="filters-label" title="Show every field in full - Notes and any text column of your own - limited only by the width of the cell it is in, never by a character count. Off shows the start of a long value with the rest on hover.">&#128196; Full text
+    <input type="checkbox" id="f_full_text"></label>
+
+  <label id="f_show_hidden_label" class="filters-label" title="A hidden model is one you have put aside, and a variation - one downloadable build filed under a model - is stored as a hidden row too. Nothing was thrown away.">&#128584; Hidden<span id="f_show_hidden_count" class="show-hidden-count"></span>
+    <select id="f_show_hidden" class="filter-select-sm">
+      <option value="">Show all hidden</option>
+      <option value="hide">Hide all hidden</option>
+      <option value="only">Show only hidden</option>
+    </select></label>
+
+  <label class="filters-label" title="Only models where you have written something: a note, a favourite star, or a value in a column you made.">&#9998; Edited by me
+    <select id="f_edited_by_me" class="filter-select-sm">
+      <option value="">All models</option>
+      <option value="only">Edited by me</option>
+    </select></label>
+
+  <label class="filters-label" title="Only models with (or without) at least one recorded variation - a downloadable build filed under it. Has variations also draws each model's builds underneath it.">&#128256; Variations
+    <select id="f_variations" class="filter-select-sm">
+      <option value="">All</option>
+      <option value="yes">Has variations</option>
+      <option value="no">No variations</option>
+    </select></label>
+
+  <!-- One control over two layouts: on a wide screen it takes out the columns no
+       model on show has a value in, and on a card it takes out that card's own
+       empty cells. It is a layout preference, so it is stored with the rest of
+       your view (hide_empty), never written into the address, and Clear leaves
+       it alone.
+       On by default: with a hundred columns, most of them empty on most models,
+       off is a table of blanks. -->
+  <label class="filters-label" id="f_hide_empty_label" title="Hide what holds nothing: on a wide screen the columns no model currently shown has a value in, and on a narrow one each card's own empty fields. Your own hidden columns stay hidden either way.">&#129529; Hide empty
+    <input type="checkbox" id="f_hide_empty" checked></label>
+
+  <!-- The width below which the table becomes one card per model instead. A
+       layout preference like Hide empty: stored with the view (cards_below),
+       never written into the address, and Clear leaves it alone. 1642 is the
+       width at which the table stops fitting, and app.js rewrites the
+       stylesheet rules this reader's pick belongs to through the CSSOM - the
+       rules themselves never change. -->
+  <label class="filters-label" title="How narrow the window has to get before the table turns into one card per model. A lower figure keeps the table a table longer; never keeps it a table at any width.">&#128241; Cards below
+    <select id="f_cards_below" class="filter-select-sm">
+      <option value="1642">1642 (when the table stops fitting)</option>
+      <option value="1400">1400</option>
+      <option value="1200">1200</option>
+      <option value="1000">1000</option>
+      <option value="800">800</option>
+      <option value="0">Never</option>
+    </select></label>
+
+  <!-- The small marks beside a value that say who stated it. Stored with the
+       view exactly as Hide empty is: out of the address, untouched by Clear. -->
+  <label class="filters-label" id="f_show_marks_label" title="The small marks beside a value that say who stated it: OpenRouter or HuggingFace where both could, Research where nothing automatic has, a red mark where the two disagree. Untick to hide the names; the red mark always stays.">&#128488; Who said it
+    <input type="checkbox" id="f_show_marks"></label>
+
+  <!-- One control per visible column, grouped into domain-group sections,
+       built by app.js. display:contents in style.css lets the sections flow as
+       direct children of the row. -->
+  <div id="col-filters"></div>
   </div>
 </div>
+
+<div id="table-area">
+
+<!-- The two voices of the #status toast below. The toast is position:fixed and
+     shows one line at a time; these say the same line out loud, and they are
+     separate elements for two reasons. A screen reader announces a change only
+     inside a live region, and it announces EVERY change inside one - so marking
+     the toast itself live would also announce it being CLEARED three seconds
+     later, as silence or as a repeat. And a failure has to interrupt while a
+     progress note must not, which one element cannot be.
+
+     Polite waits for a gap in what the reader is already saying; assertive cuts
+     in. Errors take the assertive one, everything else the polite one. The toast
+     stays readable by browsing to it, so nothing is announced twice. -->
+<p id="status-announce" class="sr-only" role="status"></p>
+<p id="status-alert" class="sr-only" role="alert"></p>
 
 <div id="toolbar">
   <span id="status"></span>
 </div>
+
+<!-- Says what a filter change just did to the row count: one sentence, set
+     and shown by showFilterFeedback in app.js, replaced (never stacked) on
+     the next change, and self-clearing after 3.2s. No interactive content and
+     no tabindex, so it is never a stop in the Tab order; no role of its own,
+     because #status-announce above already carries the same text to a screen
+     reader at the same moment, for the reason given on that element above. -->
+<p id="filter-feedback"></p>
+
+<!-- What a view showing one column says for itself. A view made from New starts
+     with the model name alone, and a table of one column with nothing above it
+     reads as a fault - so it is labelled, with the next step beside it. app.js
+     unhides it whenever the view on screen draws exactly one column, and hides
+     it the moment a second is drawn. It stays out of the way while
+     #empty-catalog is showing: with no models there is nothing to arrange. -->
+<div id="view-one-column" hidden>
+  <p>This view shows only the model name.</p>
+  <button id="view-one-column-btn" type="button">Choose columns</button>
+</div>
+
+<!-- Shown only when the catalog holds no models at all. ModelsDB carries no
+     models of its own and fills itself from OpenRouter, so this is what a first
+     launch looks like when it could not reach openrouter.ai, and what an
+     emptied database looks like on reload. A table with nothing in it and
+     nothing above it reads as a broken page, so this names the one control that
+     fills it. app.js unhides it after loading the rows; with a single row to
+     show it stays hidden. -->
+<div id="empty-catalog" hidden>
+  <h2>No models yet</h2>
+  <p>ModelsDB starts empty and fills itself from OpenRouter: the next update stores every model OpenRouter lists.</p>
+  <button id="empty-catalog-update" type="button" class="btn-update">Update models</button>
+  <p>That needs an internet connection. If it reports an error, check that this machine can reach <code>openrouter.ai</code>, then try again.</p>
+  <p>No internet? You can still add a model by hand. Open the menu at the top right of the page, press <strong>Add model</strong> and choose <strong>Custom model</strong>.</p>
+</div>
+
+<!-- Shown only when the search box holds text and the search it asks for
+     found nothing. app.js then asks GET /api/models/similar for names close
+     to what was typed, and each one here is a button: clicking it puts that
+     name in the search box and searches again. Hidden the rest of the time,
+     including while the search box is empty, because an empty box is not a
+     search that failed. -->
+<div id="did-you-mean" hidden>
+  <p>No model's name matches that search. Did you mean one of these?</p>
+  <div id="did-you-mean-list"></div>
+</div>
+
+<!-- On the screen from the first paint, with no JavaScript involved, so a slow
+     load reads as work rather than as a broken page. The words above the grey
+     rows are what say how far the load has got: app.js moves them as each
+     request answers, and mirrors each line to #status-announce so a screen
+     reader hears them too. fillTable() removes the whole thing the moment the
+     real rows are in the page; a failed request replaces it with the failure
+     text instead, so it never shimmers for ever. The grey rows are decoration
+     and are hidden from a screen reader; the words are not. -->
+<div id="load-skeleton">
+  <p id="load-progress">Reading the column list...</p>
+  <div class="skel-table" aria-hidden="true">
+    <div class="skel-row skel-head">
+      <span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span>
+    </div>
+    <div class="skel-row">
+      <span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span>
+    </div>
+    <div class="skel-row">
+      <span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span>
+    </div>
+    <div class="skel-row">
+      <span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span>
+    </div>
+    <div class="skel-row">
+      <span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span>
+    </div>
+    <div class="skel-row">
+      <span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span>
+    </div>
+    <div class="skel-row">
+      <span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span>
+    </div>
+    <div class="skel-row">
+      <span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span>
+    </div>
+    <div class="skel-row">
+      <span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span><span class="skel-cell"></span>
+    </div>
+  </div>
+</div>
+
 <table id="models" class="display table-full-width">
 </table>
+</div>
+</main>
 
-<div id="modal">
+<!-- The model details overlay. It carries role="dialog" for the same reason
+     #col-manage-modal does: it is one, and the page's own keyboard shortcuts
+     stand down while any displayed dialog role or open native <dialog> is on
+     screen, so a new overlay is covered by carrying the role rather than by a
+     line of its own in app.js. -->
+<div id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
   <div id="modal-content">
     <div id="modal-head">
-      <h3>Model Details</h3>
+      <!-- Focus lands here when the overlay opens, so Escape reaches the
+           overlay's own handler and a screen reader hears the title first. -->
+      <h3 id="modal-title" tabindex="-1">Model Details</h3>
+      <!-- Shown at EVERY width, unlike #modal-copy: the JSON below can be
+           selected by hand on a desktop, and a brief that is generated on the
+           fly cannot be selected anywhere. -->
+      <button id="modal-agent" type="button" title="Copy a short brief for an AI assistant: which facts are missing for this model, and how to send them back to this app.">Copy agent brief</button>
+      <!-- Shown only for a model that has a HuggingFace repository recorded,
+           which is the only kind there is anything to re-read for. This is where
+           a model already in the catalog is normally met - the add dialog is for
+           one that is not here yet - so the re-import has to be reachable from
+           here or it is reachable only by adding the model again. app.js shows
+           and hides it as the dialog opens. -->
+      <button id="modal-reimport" type="button" hidden title="Read this model's HuggingFace repository again and rewrite what the importer measures. Your notes, your star and the columns you fill in yourself are not touched.">Re-import from HuggingFace</button>
       <button id="modal-copy" type="button" title="Copy the details JSON">Copy JSON</button>
-      <span id="modal-close">&times;</span>
+      <!-- A real button, like every other dialog's close mark: Tab reaches it,
+           Enter and Space press it, and a screen reader hears its name. -->
+      <button type="button" id="modal-close" aria-label="Close">&times;</button>
     </div>
+    <!-- The re-import asks before it writes, and NAMES the columns it will
+         overwrite: nothing here can be undone, so "are you sure" without a list
+         is a question nobody can answer. Filled in and unhidden by app.js. -->
+    <div id="modal-reimport-panel" hidden>
+      <p id="modal-reimport-what" class="color-hint"></p>
+      <p id="modal-reimport-safe" class="color-hint"></p>
+      <div class="dlg-actions">
+        <button type="button" class="btn-clear" id="modal-reimport-cancel">Cancel</button>
+        <button type="button" class="btn-update" id="modal-reimport-go">Read the repository again</button>
+      </div>
+      <p id="modal-reimport-status" class="paths-hint" role="status"></p>
+    </div>
+    <!-- The brief itself, on the screen and not only behind the button. A copy
+         can fail for reasons the page cannot control - a browser that refuses
+         the clipboard to a page served over plain http, for one - and text that
+         exists nowhere but inside a button press cannot be rescued by hand. It
+         is read-only because it is generated: editing it here would change
+         nothing that is stored. -->
+    <label for="modal-brief" class="brief-label">Brief for an AI assistant: which facts are missing for this model, and how to send them back. Copy it with the button above, or select it here.</label>
+    <textarea id="modal-brief" class="brief-box" readonly spellcheck="false" wrap="off"></textarea>
+    <p id="modal-copy-status" class="paths-hint copy-status" role="status"></p>
     <pre id="modal-json"></pre>
   </div>
 </div>
 
-<div id="pnote-tip"></div>
-
-<div id="pnote-modal">
-  <div id="pnote-modal-head">
-    <span id="pnote-modal-title">Pricing note</span>
-    <span id="pnote-modal-close">&times;</span>
-  </div>
-  <textarea id="pnote-modal-text" placeholder="Objective pricing caveat (extra SKUs the In $/Out $ columns omit)..."></textarea>
-  <div class="pnote-modal-actions">
-    <button id="pnote-modal-save" class="btn-update">Save</button>
-  </div>
-</div>
-
-<div id="paths-modal">
+<!-- A native <dialog>, opened with showModal(), NOT an overlay div. That is what
+     makes the page behind it inert, puts it in the top layer, draws the dimmer as
+     ::backdrop, and closes it on Escape - all of which a div cannot do. It matters
+     here because this dialog now holds buttons: from a plain overlay a keyboard
+     user tabs straight out of it into the table underneath and reaches row
+     controls hidden behind the dimmer. No tabindex and no role="dialog" on the
+     element - <dialog> carries the role itself. -->
+<dialog id="paths-modal" aria-labelledby="paths-dialog-title">
   <div id="paths-content">
-    <span id="paths-close">&times;</span>
-    <p class="paths-safety">Not sure this app is safe? Ask an AI: <a href="https://claude.ai/new?q=Is%20https%3A//github.com/DavidTimar1/ModelsDB%20safe%2C%20will%20it%20spy%20on%20me%2C%20will%20it%20put%20malware%20or%20virus%20on%20my%20computer%2C%20why%20is%20my%20computer%20alerting%20me%20when%20I%20want%20to%20run%20the%20exe%20file%3F" target="_blank" rel="noopener">Claude</a> &middot; <a href="https://chatgpt.com/?q=Is%20https%3A//github.com/DavidTimar1/ModelsDB%20safe%2C%20will%20it%20spy%20on%20me%2C%20will%20it%20put%20malware%20or%20virus%20on%20my%20computer%2C%20why%20is%20my%20computer%20alerting%20me%20when%20I%20want%20to%20run%20the%20exe%20file%3F" target="_blank" rel="noopener">ChatGPT</a></p>
-    <h3>Where ModelsDB keeps its files</h3>
-    <p class="paths-hint">These are the locations this running instance resolved at startup. They are read-only here; to relocate them, use a <code>config.jsonc</code> or the <code>--config-dir</code>/<code>--data-dir</code>/<code>--cache-dir</code> flags (see the <a href="https://github.com/DavidTimar1/ModelsDB/blob/main/README.md" target="_blank" rel="noopener"><strong>README</strong></a>).</p>
-    <pre id="paths-pre">Loading...</pre>
-    <div class="paths-prefs">
-      <label class="pref-row"><input type="checkbox" id="pref-auto-update"> Automatically download updates</label>
-      <p class="paths-hint">When on, a newer release is downloaded and verified in the background as soon as it is found. Applying it still needs your click on <strong>Restart to apply</strong> - the app never restarts on its own.</p>
-      <div class="pref-row">
-        <button id="btn-check-update" type="button" class="btn-update">Check for updates</button>
-        <span id="check-update-status" class="paths-hint" style="margin:0;"></span>
+    <button type="button" id="paths-close" aria-label="Close">&times;</button>
+    <h2 id="paths-dialog-title">About this install</h2>
+    <!-- Three sections in one dialog. The tabs follow the WAI-ARIA tabs pattern:
+         the strip is role=tablist, each button is role=tab pointing at its panel
+         through aria-controls, and each panel is role=tabpanel pointing back
+         through aria-labelledby. Only the selected tab is in the tab order
+         (tabindex -1 on the others); Left/Right/Home/End move between them and
+         select as they go. app.js wires that; the markup carries the roles. -->
+    <div class="dlg-tabs" role="tablist" aria-label="Info sections">
+      <button type="button" class="dlg-tab dlg-tab-on" id="tab-files" role="tab" aria-selected="true" aria-controls="panel-files">Files &amp; updates</button>
+      <button type="button" class="dlg-tab" id="tab-stats" role="tab" aria-selected="false" aria-controls="panel-stats" tabindex="-1">This catalog</button>
+      <button type="button" class="dlg-tab" id="tab-search" role="tab" aria-selected="false" aria-controls="panel-search" tabindex="-1">Searching</button>
+    </div>
+
+    <div class="dlg-panel" id="panel-files" role="tabpanel" aria-labelledby="tab-files" tabindex="0">
+      <!-- The one place the version and the GitHub link live outside the menu.
+           The version span is filled by app.js from the update-check answer. -->
+      <p class="paths-hint">ModelsDB <span id="app-version" title="Installed version"></span> &middot; <a href="https://github.com/DavidTimar1/ModelsDB" target="_blank" rel="noopener">View on GitHub</a></p>
+      <p class="paths-safety">Not sure this app is safe? Ask an AI: <a href="https://claude.ai/new?q=Is%20https%3A//github.com/DavidTimar1/ModelsDB%20safe%2C%20will%20it%20spy%20on%20me%2C%20will%20it%20put%20malware%20or%20virus%20on%20my%20computer%2C%20why%20is%20my%20computer%20alerting%20me%20when%20I%20want%20to%20run%20the%20exe%20file%3F" target="_blank" rel="noopener">Claude</a> &middot; <a href="https://chatgpt.com/?q=Is%20https%3A//github.com/DavidTimar1/ModelsDB%20safe%2C%20will%20it%20spy%20on%20me%2C%20will%20it%20put%20malware%20or%20virus%20on%20my%20computer%2C%20why%20is%20my%20computer%20alerting%20me%20when%20I%20want%20to%20run%20the%20exe%20file%3F" target="_blank" rel="noopener">ChatGPT</a></p>
+      <h3>Where ModelsDB keeps its files</h3>
+      <p class="paths-hint">These are the locations this running instance resolved at startup. They are read-only here; to relocate them, use a <code>config.jsonc</code> or the <code>--config-dir</code>/<code>--data-dir</code>/<code>--cache-dir</code> flags (see the <a href="https://github.com/DavidTimar1/ModelsDB/blob/main/README.md" target="_blank" rel="noopener"><strong>README</strong></a>).</p>
+      <!-- tabindex="0": this block scrolls, and a scrollable region has to be
+           reachable by keyboard or its content cannot be read without a mouse. -->
+      <pre id="paths-pre" tabindex="0">Loading...</pre>
+      <div class="paths-prefs">
+        <label class="pref-row"><input type="checkbox" id="pref-auto-update"> Automatically download updates</label>
+        <p class="paths-hint">When on, a newer release is downloaded and verified in the background as soon as it is found. Applying it still needs your click on <strong>Restart to apply</strong> - the app never restarts on its own.</p>
+        <div class="pref-row">
+          <button id="btn-check-update" type="button" class="btn-update">Check for updates</button>
+          <span id="check-update-status" class="paths-hint" style="margin:0;"></span>
+        </div>
+        <!-- Self-contained Apply/Restart controls for THIS dialog, distinct from
+             #update-banner's own #app-update-now/#app-update-restart/#app-update-progress
+             - the two surfaces show the same self-update state independently, driven by
+             the same shared JS logic in app.js (see wireAppUpdateControls/renderAppUpdate),
+             targeting their own element IDs. All start hidden/empty; a "Check for
+             updates" click is what fills them in - opening this dialog alone does not. -->
+        <div class="pref-row">
+          <button id="modal-app-update-now" class="update-action" type="button" style="display:none">Apply update</button>
+          <button id="modal-app-update-restart" class="update-action" type="button" style="display:none">Restart to apply</button>
+          <span id="modal-app-update-progress" class="modal-update-progress"></span>
+          <a id="modal-app-update-source" class="update-action" href="#" target="_blank" rel="noopener" style="display:none">Get binary from source</a>
+        </div>
+      </div>
+
+      <!-- The daily model update: an opt-in switch that makes the server run the
+           same refresh as Update models once a day while it runs. Its own block
+           so the heading says "model", which keeps it apart from "Automatically
+           download updates" above, which is the app's own update. On until
+           unticked. The line under it is the result of the last run, whoever
+           started it; app.js fills it when this dialog opens. -->
+      <div class="paths-prefs">
+        <h3>Daily model update</h3>
+        <label class="pref-row daily-update-row"><input type="checkbox" id="daily-update-enabled" name="daily_update_enabled" autocomplete="off" aria-describedby="daily-update-status"> Update the model catalog from OpenRouter once a day</label>
+        <p id="daily-update-status" class="paths-hint"></p>
+      </div>
+
+      <!-- Automatic backups: an opt-in daily copy of the whole database into a
+           folder the user types in, only when something changed since the last
+           one. Lives inside the SAME "Files & updates" panel rather than a
+           third dialog tab - this panel already covers "where this instance
+           keeps its files", and a new tab would need the tab-strip roles,
+           aria-controls wiring, and arrow-key handling in app.js extended for
+           no real benefit. Off by default (see README's "Backing up your
+           data"): the destination is a decision about somebody's disk, and the
+           app does not make it for them. -->
+      <div class="paths-prefs">
+        <h3>Automatic backups</h3>
+        <p class="paths-hint">Off by default. When on, this instance writes one complete copy of <code>modelsdb.db</code> into the folder below, once a day, only when something has actually changed since the last backup.</p>
+        <label class="pref-row"><input type="checkbox" id="backup-enabled"> Back up automatically, once a day</label>
+        <!-- The path is kept the moment focus leaves the field, so a folder
+             typed and tabbed away from is never lost. The button does the same
+             thing and SAYS SO: without it nothing on the screen tells the reader
+             their path was kept, which is a poor thing to have to guess about a
+             backup destination. -->
+        <div class="pref-row">
+          <label for="backup-dir" class="sr-only">Backup destination folder</label>
+          <input type="text" id="backup-dir" class="filter-input" placeholder="/path/to/your/backup/folder" style="flex:1; min-width:0;">
+          <button id="backup-dir-save" type="button" class="btn-update">Save path</button>
+        </div>
+        <p id="backup-dir-verdict" class="paths-hint" role="status"></p>
+        <label class="pref-row"><input type="checkbox" id="backup-overwrite"> Replace the same file each time (unticked: keep every run, each stamped with its own date and time)</label>
+        <div class="pref-row">
+          <button id="btn-backup-now" type="button" class="btn-update">Back up now</button>
+          <span id="backup-run-status" class="paths-hint" style="margin:0;"></span>
+        </div>
+        <p id="backup-last-status" class="paths-hint"></p>
+        <h3>Backups in this folder</h3>
+        <pre id="backup-listing" class="backup-listing" tabindex="0">Open this dialog to load it.</pre>
+      </div>
+    </div>
+
+    <!-- The catalog's numbers. Counted afresh from the SERVER every time this
+         tab is selected: the rows the page holds are the FILTERED ones, so
+         totals read off them would lie whenever a filter is active, and the
+         count costs nothing until somebody looks. The one figure read off the
+         table itself is "shown by the filters right now", which is exactly the
+         question that figure answers. The tables are filled in by app.js. -->
+    <div class="dlg-panel" id="panel-stats" role="tabpanel" aria-labelledby="tab-stats" tabindex="0" hidden>
+      <h3>This catalog in numbers</h3>
+      <p id="stats-status" class="paths-hint" role="status"></p>
+      <h3>Models</h3>
+      <div class="stats-scroll"><table class="stats-table" id="stats-models"><tbody></tbody></table></div>
+      <h3>Where each row came from</h3>
+      <div class="stats-scroll"><table class="stats-table" id="stats-sources"><thead><tr><th>Source</th><th>Models</th></tr></thead><tbody></tbody></table></div>
+      <p class="paths-hint"><code>source</code> says whether a row is OpenRouter's: an update sets it on every model the feed lists, whichever route first created that row, and a row OpenRouter lists cannot be deleted. The next table is the one that says who knows something about a model NOW.</p>
+      <h3>What each source knows</h3>
+      <div class="stats-scroll"><table class="stats-table" id="stats-namespaces"><thead><tr><th>Group</th><th>Columns</th><th>Models with a value</th><th>Values held</th></tr></thead><tbody></tbody></table></div>
+      <h3>Columns</h3>
+      <div class="stats-scroll"><table class="stats-table" id="stats-columns"><thead><tr><th>Group</th><th>Columns</th><th>Shown</th></tr></thead><tbody></tbody></table></div>
+      <p id="stats-columns-note" class="paths-hint"></p>
+    </div>
+
+    <!-- How to write a search. Static text: it teaches the one small language
+         that internal/app/query.go reads for name=, contains: and
+         /api/columns/values?contains=, and says the same thing as the SEARCH
+         SYNTAX part of the served guide. Change one, change the other. -->
+    <div class="dlg-panel" id="panel-search" role="tabpanel" aria-labelledby="tab-search" tabindex="0" hidden>
+      <h3>Writing a search</h3>
+      <p class="paths-hint">These boxes all read the same search: the main search, a column's text box, the search above a column's list of values, the search in the Columns dialog, and the search for the model to file a variation under. Half-typed text is never refused. It is read as far as it goes.</p>
+      <h3>The rules</h3>
+      <ul class="search-help">
+        <li>Plain words: every word must appear, in any order. <code>gpt 4o</code> finds a name holding both <code>gpt</code> and <code>4o</code>.</li>
+        <li>A phrase in double quotes must appear exactly as written, spaces included. <code>"gpt 4o"</code> finds only names with <code>gpt 4o</code> in a row.</li>
+        <li>A <code>!</code> at the start of a word or a phrase leaves it out. <code>gpt !mini</code> finds <code>gpt</code> without <code>mini</code>. <code>!"gpt 4o"</code> leaves out that phrase.</li>
+        <li><code>OR</code> means either side. <code>claude OR gemini</code> finds both families.</li>
+        <li><code>AND</code> means the same as a space. <code>vision AND audio</code> is the same as <code>vision audio</code>.</li>
+        <li><code>AND</code> is applied before <code>OR</code>. <code>a b OR c</code> means <code>a</code> and <code>b</code>, or <code>c</code>.</li>
+        <li>Only capital <code>AND</code> and <code>OR</code> are operators. <code>and</code> and <code>or</code> in small letters are ordinary words.</li>
+        <li>There are no parentheses. <code>(free)</code> is plain text with brackets in it.</li>
+        <li>A <code>!</code> inside a word is just a letter. <code>gpt-4o!</code> does not exclude anything.</li>
+        <li>Capitals in your words are ignored. <code>GPT</code> and <code>gpt</code> find the same models.</li>
+      </ul>
+      <h3>Two rules you might not guess</h3>
+      <ul class="search-help">
+        <li>In a column that holds a list, each word may be found in a different item of the list. A quoted phrase must sit inside one item.</li>
+        <li>A <code>!</code> word also keeps the models that have no value in that column. In the notes column, <code>!draft</code> finds every model with no note, as well as the notes that do not say draft.</li>
+      </ul>
+      <h3>For an assistant or a script</h3>
+      <p class="paths-hint">The API reads the same search through <code>name=</code> and <code>contains:</code>. For example <code>/api/models?name=claude%20!haiku</code> lists the Claude models without haiku.</p>
+    </div>
+  </div>
+</dialog>
+
+<!-- Delete confirmation. It is a dialog rather than a browser confirm() because it
+     offers a third answer: hide it, which keeps the model and everything written
+     about it and only takes it out of the list. A native <dialog>
+     opened with showModal(), like the info dialog: the destructive question is the
+     last one that should let a keyboard user tab out of it into the table behind.
+     The text is filled in by app.js so it can name the model and what it loses. -->
+<dialog id="delete-modal" aria-labelledby="delete-modal-title">
+  <div id="delete-modal-content">
+    <button type="button" id="delete-modal-close" aria-label="Close">&times;</button>
+    <h2 id="delete-modal-title">Delete this model?</h2>
+    <p class="color-hint" id="delete-modal-what"></p>
+    <p class="color-hint" id="delete-modal-alt"></p>
+    <!-- Order matters and is not cosmetic. Cancel is RIGHTMOST and takes focus,
+         because every other dialog in this app puts its go-ahead there (#color-done,
+         #col-new-create) - so the rightmost button is where the hand already goes,
+         and putting the irreversible one there would be a trap. -->
+    <div class="delete-actions">
+      <button id="delete-confirm" type="button" class="btn-danger">Delete permanently</button>
+      <button id="delete-hide" type="button" class="btn-clear">Hide it instead</button>
+      <button id="delete-cancel" type="button" class="btn-clear">Cancel</button>
+    </div>
+    <span id="delete-status" class="paths-hint" role="status"></span>
+  </div>
+</dialog>
+
+<!-- What a cell's mark opens: every source declared for that column on that
+     model, in the column's fixed order, what each said and when, and which
+     one is shown. A native <dialog> opened with showModal(), like the delete
+     dialog. The close button is its only control: nothing here changes which
+     answer is shown. Everything inside is filled in by app.js. -->
+<dialog id="answers-modal" aria-labelledby="answers-modal-title">
+  <div id="answers-modal-content">
+    <button type="button" id="answers-modal-close" aria-label="Close">&times;</button>
+    <h2 id="answers-modal-title">Where this answer comes from</h2>
+    <p class="color-hint" id="answers-modal-lead"></p>
+    <ul id="answers-modal-list"></ul>
+  </div>
+</dialog>
+
+<!-- Adding a variation of a model, in two steps: which HuggingFace
+     repository publishes versions of it, then which version in that repository.
+     Neither step can be decided by the app - the repositories come from many
+     owners and not all of them really are versions of this model, and the files
+     inside one are a mix of versions, multi-file sets and vision projectors - so
+     both steps LIST and the person chooses.
+
+     A native <dialog> opened with showModal(), like the info and delete dialogs:
+     it holds a list of buttons, and from a plain overlay div a keyboard user
+     tabs straight out of it into the table behind. Everything inside is filled
+     in by app.js. -->
+<dialog id="variation-modal" aria-labelledby="variation-modal-title">
+  <div id="variation-modal-content">
+    <button type="button" id="variation-close" aria-label="Close">&times;</button>
+    <h2 id="variation-modal-title">Add a variation</h2>
+    <p class="color-hint">A variation is a file you fetch from HuggingFace and run on your own machine: the same model with each weight stored in fewer bits, so it takes less space. Recording one here keeps a note of where it is and how big it is. Nothing is downloaded.</p>
+    <p id="variation-status" class="paths-hint" role="status"></p>
+    <!-- Both lists can run to a hundred entries or more, so each carries its own
+         order control. They are separate controls because the two steps sort on
+         different things: a repository is judged by how much it is used, a file
+         by whether it fits the machine. app.js hides each one until its list has
+         more than one entry to order. -->
+    <div id="variation-repos-sort" class="var-picksort" hidden>
+      <label>Order
+        <select id="variation-repo-order">
+          <option value="downloads">Most downloaded</option>
+          <option value="likes">Most liked</option>
+          <option value="name">Name, A to Z</option>
+          <option value="listed">As HuggingFace listed them</option>
+        </select></label>
+    </div>
+    <div id="variation-repos" class="var-picklist"></div>
+    <h3 id="variation-files-head" class="var-files-head"></h3>
+    <div id="variation-files-sort" class="var-picksort" hidden>
+      <label>Order
+        <select id="variation-build-order">
+          <option value="size-asc">Size, smallest first</option>
+          <option value="size-desc">Size, largest first</option>
+          <option value="bit-asc">Bits, fewest first</option>
+          <option value="bit-desc">Bits, most first</option>
+        </select></label>
+    </div>
+    <div id="variation-files" class="var-picklist"></div>
+
+    <!-- The second way a variation comes to exist. Everything above CREATES a
+         row from a HuggingFace repository the server reads; this MOVES a row
+         that is already in the catalog - a version somebody added as a model of
+         its own, by hand or from a HuggingFace address, which belongs under the
+         model it was made from. Nothing is fetched, so nothing is measured: the
+         row keeps every value it holds and gains one fact. -->
+    <div id="variation-existing">
+      <h3>Or file a model you already have under this one</h3>
+      <p class="color-hint">If a version of this model is already a row of its own, file it here instead of recording it again. Nothing is downloaded and nothing is looked up: the row keeps its note, its favourite star, every column value and every figure it holds, and gains one fact - that it is a variation of this model. <strong>It becomes hidden, like every variation</strong>, which does not take it off the screen: it moves out of the model list and appears under this model instead. If you have set the <strong>Hidden</strong> dropdown to "Hide all hidden", set it back to "Show all hidden" - or set the <strong>Variations</strong> filter to "Has variations" - to see it there.</p>
+      <input type="search" id="variation-existing-search" class="filter-input" placeholder="Type part of a model's name (!no, &quot;a phrase&quot;, OR)...">
+      <div id="variation-existing-list" class="var-picklist"></div>
+      <p id="variation-existing-status" class="paths-hint" role="status"></p>
+    </div>
+
+    <div class="delete-actions">
+      <button id="variation-cancel" type="button" class="btn-clear">Close</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- Adding a model, in one dialog with three states swapped in place: choose a
+     path, fill it in, then read what happened. A native <dialog> opened with
+     showModal(), like the delete and version dialogs - it holds a form, and from
+     a plain overlay div a keyboard user tabs straight out of it into the table
+     behind. The title is rewritten per state and focus moves to the new state's
+     first control, so the change is announced rather than silent.
+
+     A dialog NEVER uses the #status toast: #status is position:fixed at
+     z-index 1000, and a native dialog renders in the browser's top layer above
+     it, so a toast fired while this is open cannot be seen. Everything this
+     dialog has to say goes in its own role="status" line. -->
+<dialog id="add-modal" aria-labelledby="add-modal-title">
+  <div id="add-modal-content">
+    <button type="button" id="add-close" aria-label="Close">&times;</button>
+    <h2 id="add-modal-title">Add a model</h2>
+    <p id="add-modal-lead" class="color-hint">Two ways in. If the model is on HuggingFace, this app can read the repository itself; if it is on no site this app can read, you type what you know.</p>
+    <p id="add-status" class="paths-hint" role="status"></p>
+    <!-- Filled in by app.js only where the server's own answer leaves the person
+         with no next step: to the row that already has this name, or to the
+         custom form with the name filled in. -->
+    <div id="add-extra"></div>
+
+    <!-- State one: which path. Two full-width two-line buttons, the control this
+         app already uses for "here are the options, pick one". -->
+    <div id="add-choose" class="var-picklist">
+      <button type="button" class="var-pick" id="add-pick-hf">
+        <span class="var-pick-name">From a HuggingFace address</span>
+        <span class="var-pick-meta">Paste the model's page link. ModelsDB reads the repository itself and fills in the author, description, context length, size on disk and parameter count.</span>
+      </button>
+      <button type="button" class="var-pick" id="add-pick-custom">
+        <span class="var-pick-name">Custom model</span>
+        <span class="var-pick-meta">For a model that is on no site this app can read. You type every field yourself. Nothing is looked up.</span>
+      </button>
+    </div>
+
+    <!-- State two, first path: one address and nothing else. A real <form> so
+         Enter submits it the way a browser already does. -->
+    <form id="add-hf-form" novalidate hidden>
+      <div class="form-field">
+        <label for="add-hf-url">HuggingFace address</label>
+        <input type="url" id="add-hf-url" class="filter-input" inputmode="url" spellcheck="false" placeholder="https://huggingface.co/Qwen/Qwen3-32B">
+      </div>
+      <p class="color-hint">Paste the page link, or just owner/model. The server reads the repository, so this is the only thing you type.</p>
+      <div class="dlg-actions">
+        <button type="button" class="btn-clear dlg-back" id="add-hf-back">Back</button>
+        <button type="submit" class="btn-update" id="add-hf-go">Import</button>
+      </div>
+    </form>
+
+    <!-- State two, second path: the custom-model form. Its fields are built by
+         app.js from one definition shared with the per-row edit dialog, so there
+         is one form and two uses. -->
+    <form id="add-form" novalidate hidden>
+      <p id="add-form-status" class="form-summary" role="alert" tabindex="-1"></p>
+      <div id="add-form-fields"></div>
+      <div class="dlg-actions">
+        <button type="button" class="btn-clear dlg-back" id="add-form-back">Back</button>
+        <button type="submit" class="btn-update" id="add-form-save">Add model</button>
+      </div>
+    </form>
+
+    <!-- State three: what was read, what is still empty, and the two ways to
+         fill it in - by hand on the row, or by handing an assistant a brief. -->
+    <div id="add-result" hidden>
+      <p id="add-result-what"></p>
+      <p id="add-result-read" class="color-hint"></p>
+      <p class="paths-hint">If you use an AI assistant (Claude, ChatGPT, or a coding agent), this copies a short brief telling it which facts are missing for this model and how to send them back. If you do not use one, ignore this: you can type the same facts into the row yourself.</p>
+      <!-- The brief itself, on the screen and not only behind the button, for
+           the same reason as the one in the details modal: a copy can fail, and
+           text that lives nowhere but inside a button press leaves the reader
+           with nothing to fall back on. Read-only because it is generated. -->
+      <label for="add-result-brief" class="brief-label">The brief. Copy it with the button below, or select it here and copy it by hand.</label>
+      <textarea id="add-result-brief" class="brief-box" readonly spellcheck="false" wrap="off"></textarea>
+      <p id="add-copy-status" class="paths-hint copy-status" role="status"></p>
+      <div class="dlg-actions">
+        <button type="button" class="btn-clear dlg-back" id="add-result-back">Back</button>
+        <button type="button" class="btn-clear" id="add-copy-instructions">Copy agent brief</button>
+        <button type="button" class="btn-update" id="add-done">Done</button>
       </div>
     </div>
   </div>
-</div>
+</dialog>
 
-<div id="color-modal">
-  <div id="color-modal-content">
-    <span id="color-modal-close">&times;</span>
-    <h3>In $ / Out $ colour thresholds</h3>
-    <p class="color-hint">Per pricing unit: a value below <b>cheap&nbsp;&lt;</b> is green, below <b>&lt;&nbsp;pricey</b> is yellow, otherwise red. Numbers are in the same units shown in the column (see the Unit column). Changes apply and save instantly.</p>
-    <table id="color-table">
-      <thead><tr><th>Unit</th><th>cheap &lt;</th><th>&lt; pricey</th><th>colours</th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <div class="color-actions">
-      <button id="color-reset" class="btn-clear">Reset to defaults</button>
-      <button id="color-done" class="btn-update">Done</button>
-    </div>
+<!-- Editing one model, field by field. Same shape as the add dialog and the same
+     form definition inside it; what differs is that the name cannot be changed,
+     the values are read fresh from the server on open, and a field an
+     automatic source has stated on THIS model is a read-only line with the
+     reason beside it. -->
+<dialog id="edit-modal" aria-labelledby="edit-modal-title">
+  <div id="edit-modal-content">
+    <button type="button" id="edit-close" aria-label="Close">&times;</button>
+    <h2 id="edit-modal-title">Edit model</h2>
+    <p class="color-hint">A model cannot be renamed here. To change a name, add the new row and remove the old one.</p>
+    <p id="edit-owned-note" class="paths-hint" hidden></p>
+    <form id="edit-form" novalidate>
+      <p id="edit-form-status" class="form-summary" role="alert" tabindex="-1"></p>
+      <div id="edit-form-fields">Loading...</div>
+      <div class="dlg-actions">
+        <span class="dlg-actions-note">Undo (Ctrl+Z) covers single-cell edits, not this form.</span>
+        <button type="button" class="btn-clear" id="edit-cancel">Cancel</button>
+        <button type="submit" class="btn-update" id="edit-save">Save</button>
+      </div>
+    </form>
+    <p id="edit-status" class="paths-hint" role="status"></p>
   </div>
-</div>
+</dialog>
 
-<div id="cc-manage-modal">
-  <div id="cc-manage-content">
-    <span id="cc-manage-close">&times;</span>
-    <h3>Custom columns</h3>
-    <p class="color-hint">Personal columns you define yourself - a plain text field, or a single-select dropdown of text or number labels. They live only in this database: never shared, never published, never exported to <code>curated.json</code>.</p>
-    <table id="cc-manage-table">
-      <thead><tr><th>Name</th><th>Type</th><th></th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <div class="cc-manage-new">
-      <h4>Add a column</h4>
-      <input type="text" id="cc-new-name" placeholder="Column name..." class="filter-input">
-      <select id="cc-new-type" class="filter-select">
-        <option value="text">Text</option>
-        <option value="dropdown_text">Dropdown (text values)</option>
-        <option value="dropdown_number">Dropdown (number labels)</option>
-      </select>
-      <textarea id="cc-new-options" placeholder="One value per line, in the order they should appear..." style="display:none"></textarea>
-      <div class="cc-manage-new-actions">
-        <button id="cc-new-create" class="btn-update">Add column</button>
-        <span id="cc-new-status" class="paths-hint" style="margin:0;"></span>
+<!-- Every column this catalog holds, and everything that can be done to one.
+     A column belongs to whoever wrote it: the app SHIPS the source and computed
+     columns, so those can be shown, hidden and renamed and never deleted, and a
+     column of your own can be anything you like. Whichever it is, its KEY never
+     changes - which is what makes a rename free, and what a saved layout and a
+     link both name a column by.
+
+     One row shape at every width: cmgRowFor in app.js builds a <tr> with a cell
+     each for the Table tick, the Filter tick, Title, id, type, answers, subject, written by, order and
+     actions, and style.css turns each <tr> into a two-line grid below the
+     card breakpoint. The prose about the layout, the tick and the move rules lives in the
+     help list under the toolbar, opened by (?). -->
+<div id="col-manage-modal" role="dialog" aria-modal="true" aria-labelledby="col-manage-title">
+  <div id="col-manage-content">
+    <button type="button" id="col-manage-close" aria-label="Close">
+      <svg class="cmg-close-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <h3 id="col-manage-title">Columns</h3>
+    <!-- The add-column form sits here, above every control and every row, so
+         adding a column never sends the reader hunting for it at the bottom of
+         a near-full-screen dialog. -->
+    <div class="col-manage-new">
+      <h4>Make a column of your own</h4>
+      <div class="col-manage-new-fields">
+        <input type="text" id="col-new-name" placeholder="Heading..." class="filter-input">
+        <select id="col-new-type" class="filter-select">
+          <option value="text">Text</option>
+          <option value="number">Number</option>
+          <option value="flag">Yes or no</option>
+          <option value="choice">One of a list</option>
+          <option value="list">A list of words</option>
+        </select>
+      </div>
+      <textarea id="col-new-options" placeholder="One label per line, in the order they should sort in..." style="display:none"></textarea>
+      <div class="col-manage-new-actions">
+        <button id="col-new-create" class="btn-update">Add column</button>
+        <span id="col-new-status" class="paths-hint" style="margin:0;"></span>
       </div>
     </div>
+    <!-- The toolbar: only ways to FIND a column. A control that takes a value
+         (a select, a text box, the two dropdowns) is a word control; a
+         control that is one action or one on/off (Only shown, the help
+         toggle) is an icon. Every control here is remembered: app.js stores
+         them as one app preference and the dialog reopens with them, and
+         the Clear filters button puts them all back to their defaults. The
+         sticky bar below holds the Shown tick, Undo, Redo and Reset order
+         instead. -->
+    <div class="cmg-toolbar">
+      <input type="search" id="cmg-search" class="cmg-tool-input" placeholder="Search columns... (!no, &quot;a phrase&quot;, OR)" aria-label="Search the columns by heading, id or feed name">
+      <label class="cmg-pick">Sort
+        <select id="cmg-sort" class="cmg-tool-select" aria-label="Sort this list">
+          <option value="table">Table order</option>
+          <option value="alpha">Title</option>
+          <option value="key">id</option>
+          <option value="type">Type</option>
+          <option value="answers">Answers, most first</option>
+          <option value="subject">Subject</option>
+        </select></label>
+      <label class="cmg-pick">Answers
+        <select id="cmg-answers" class="cmg-tool-select" aria-label="Show only the columns with answers, or only the columns without">
+          <option value="any">Any</option>
+          <option value="has">Has answers</option>
+          <option value="none">None</option>
+        </select></label>
+      <!-- The two dropdowns: the filter panel's own value-list shell
+           (attachVlf builds .vlf-btn / .vlf-panel), with native checkboxes
+           standing in for the three-state row a value list needs when
+           "excluded" is a state worth having - a two-state list has no use
+           for it. Built and driven by app.js. -->
+      <div class="cmg-dd">
+        <button type="button" class="cmg-dd-btn" id="cmg-subject-btn" aria-expanded="false" aria-controls="cmg-subject-panel"></button>
+        <div class="cmg-dd-panel" id="cmg-subject-panel" hidden></div>
+      </div>
+      <div class="cmg-dd">
+        <button type="button" class="cmg-dd-btn" id="cmg-kind-btn" aria-expanded="false" aria-controls="cmg-kind-panel"></button>
+        <div class="cmg-dd-panel" id="cmg-kind-panel" hidden></div>
+      </div>
+      <button type="button" id="cmg-drawn-only" class="cmg-icon-toggle" aria-pressed="false" title="Only the columns the table shows" aria-label="Only the columns the table shows">
+        <svg class="cmg-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="2.6"/></svg>
+      </button>
+      <button type="button" id="cmg-filters-clear" class="btn-clear" hidden>Clear filters</button>
+      <button type="button" id="cmg-help-toggle" class="cmg-icon-toggle" aria-expanded="false" aria-controls="cmg-help" title="What everything here does">
+        <svg class="cmg-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 4.9.7c0 1.6-2.4 2-2.4 3.6" stroke-linecap="round"/><circle cx="12" cy="17.2" r="0.15" fill="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span class="sr-only">What everything here does</span>
+      </button>
+    </div>
+    <!-- Closed on every open of the dialog: written by app.js from
+         KIND_PHRASE and KIND_LEGEND, so the words agree everywhere they
+         appear. -->
+    <ul id="cmg-help" class="cmg-help" hidden></ul>
+
+    <!-- Above the 1642px breakpoint each column is a row of #cmg-table (one
+         text line, one cell per fact); below it the same <tr> becomes a two-line
+         grid, because a table row's cells have nowhere else to go on a
+         narrow screen. One builder, cmgRowFor, serves every width. -->
+    <div id="col-manage-list">
+      <!-- The tick here changes every column this list is showing, and never
+           the whole catalog. Its own aria-label carries that, because the
+           visible word "Shown" alone would not say what pressing it does. The
+           bar stays put while the list scrolls, because on a phone the list is
+           thousands of pixels tall. -->
+      <div class="cmg-bar">
+        <label class="cmg-all"><input type="checkbox" id="cmg-all"
+          aria-label="Shown - draw every column this list is showing"> Shown</label>
+        <p id="cmg-count" class="cmg-count" role="status"></p>
+        <p id="cmg-selected" class="cmg-selected-line" role="status"></p>
+        <button type="button" id="cmg-sel-clear" class="btn-clear" hidden>Clear</button>
+        <button type="button" id="cmg-undo" class="cmg-icon-btn" aria-label="Undo" aria-disabled="true">
+          <svg class="cmg-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7L3 12l5 5"/><path d="M3 12h11a6 6 0 0 1 0 12h-1"/></svg>
+        </button>
+        <button type="button" id="cmg-redo" class="cmg-icon-btn" aria-label="Redo" aria-disabled="true">
+          <svg class="cmg-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 7l5 5-5 5"/><path d="M21 12H10a6 6 0 0 0 0 12h1"/></svg>
+        </button>
+        <button type="button" id="cmg-reset" class="btn-clear">Reset order</button>
+      </div>
+      <!-- The header is a real row on wide, where the dialog draws #cmg-table
+           as a table; below the breakpoint style.css visually hides it
+           (.cmg-thead), because a card list has nowhere to put that many headings
+           and each row's own text already says what a cell is.
+           role="table|row|cell" is restated because the narrow layout turns
+           display: table into display: grid, which drops the roles a browser
+           infers from table markup alone. -->
+      <table id="cmg-table" class="cmg-table" role="table">
+        <thead class="cmg-thead">
+          <tr role="row">
+            <th role="cell" title="Shown as a column in the table">Table</th>
+            <th role="cell" title="Has a filter in the filter panel, which keeps working while the column is out of the table">Filter</th>
+            <th role="cell"><button type="button" class="cmg-th-btn" data-sort="alpha" aria-label="Sort by title">Title</button></th>
+            <th role="cell"><button type="button" class="cmg-th-btn" data-sort="key" aria-label="Sort by id">id</button></th>
+            <th role="cell"><button type="button" class="cmg-th-btn" data-sort="type" aria-label="Sort by type">Type</button></th>
+            <th role="cell"><button type="button" class="cmg-th-btn" data-sort="answers" aria-label="Sort by answers, most first">Answers</button></th>
+            <th role="cell"><button type="button" class="cmg-th-btn" data-sort="subject" aria-label="Sort by subject">Subject</button></th>
+            <th role="cell">Written by</th>
+            <th role="cell"><button type="button" class="cmg-th-btn" data-sort="table" aria-label="Sort by table order">Order</button></th>
+            <th role="cell">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="cmg-rows-table"></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
-<script src="/static/jquery.min.js"></script>
-<script src="/static/datatables.min.js"></script>
-<script src="/static/app.js"></script>
+<!-- The colour editor for ONE column, opened over the Columns dialog by a
+     Colours button and closed again to it. A native <dialog>, like the other
+     small dialogs in this file: Escape and a backdrop click close only this
+     one, and closing returns focus to the Colours button that opened it. Its
+     fields depend on what the column holds: thresholds for a number, two
+     answers for a yes-or-no, one line per label for a one-of-a-list. A colour
+     rule is stored on the column itself, so it is the same for a column this
+     app ships and one you invented. -->
+<dialog id="col-color-modal" aria-labelledby="col-color-title">
+  <div>
+    <button type="button" id="col-color-modal-close" aria-label="Close">&times;</button>
+    <h4 id="col-color-title" tabindex="-1"></h4>
+    <p class="color-hint" id="col-color-hint"></p>
+    <div id="col-color-fields"></div>
+    <div class="col-manage-new-actions">
+      <button id="col-color-save" class="btn-update">Save colours</button>
+      <button id="col-color-clear" class="btn-clear">No colours</button>
+      <button id="col-color-cancel" class="btn-clear">Cancel</button>
+      <span id="col-color-status" class="paths-hint" style="margin:0;"></span>
+    </div>
+  </div>
+</dialog>
+
+<!-- defer: fetches the scripts in parallel without blocking parsing or paint,
+     while still running them in document order (jQuery, DataTables,
+     FixedHeader, then app.js) right before DOMContentLoaded. -->
+<script src="/static/jquery.min.js" defer></script>
+<script src="/static/datatables.min.js" defer></script>
+<script src="/static/dataTables.fixedHeader.min.js" defer></script>
+<script src="/static/app.js" defer></script>
 </body>
 </html>

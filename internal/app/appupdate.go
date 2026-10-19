@@ -1,4 +1,4 @@
-// Package app - in-app binary self-update controller.
+// In-app binary self-update controller.
 //
 // This is the APP self-update (replace the running binary), distinct from the
 // catalog refresh on /api/update (refresh model DATA). It drives the
@@ -9,15 +9,14 @@
 // A single shared status behind a mutex mirrors updatecheck.go's style. Only one
 // staging runs at a time; concurrent triggers (the daily auto-check and a manual
 // click) collapse onto the same run.
+
 package app
 
 import (
-	"encoding/json"
 	"log"
-	"modelsdb/internal/paths"
 	"modelsdb/internal/selfupdate"
 	"modelsdb/internal/shared"
-	"os"
+	"modelsdb/internal/store"
 	"sync"
 )
 
@@ -107,18 +106,8 @@ func startAppUpdate(latest string) bool {
 }
 
 // autoUpdateEnabled reports whether the user opted into automatic downloading of
-// updates. It reads the "auto_update" boolean from settings.json (plain JSON
-// written by the UI); a missing file or key means off.
+// updates. It reads the "auto_update" row the page stores with the rest of its
+// preferences; an absent row, or one holding anything but true, means off.
 func autoUpdateEnabled() bool {
-	b, err := os.ReadFile(paths.SettingsJsonFile)
-	if err != nil {
-		return false
-	}
-	var s struct {
-		AutoUpdate bool `json:"auto_update"`
-	}
-	if json.Unmarshal(b, &s) != nil {
-		return false
-	}
-	return s.AutoUpdate
+	return store.ReadSettingBool("auto_update")
 }

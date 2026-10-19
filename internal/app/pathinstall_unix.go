@@ -3,6 +3,8 @@
 package app
 
 import (
+	"fmt"
+	"modelsdb/internal/paths"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,13 +38,48 @@ func linkStatus() (bool, string) {
 	return true, dest
 }
 
-// installLink creates (or replaces) the managed symlink pointing at exe.
+// installLink points the managed symlink at exe. It only ever replaces a
+// symlink that names a modelsdb binary, and it refuses to touch a regular file at
+// the link path: the program is commonly installed at that very path, and
+// replacing it would delete the binary being run. The new link is made beside the
+// old one and renamed over it, so the path never stands empty.
 func installLink(exe string) error {
 	if err := os.MkdirAll(localBinDir(), 0755); err != nil {
 		return err
 	}
-	_ = os.Remove(symlinkPath()) // replace any existing managed link
-	return os.Symlink(exe, symlinkPath())
+	link := symlinkPath()
+	if fi, err := os.Lstat(link); err == nil {
+		if fi.Mode()&os.ModeSymlink == 0 {
+			return fmt.Errorf("%s already exists and is not a symlink, so it is left alone (if it is this program, it is already on PATH)", link)
+		}
+		dest, err := os.Readlink(link)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(filepath.Base(dest), "modelsdb") {
+			return fmt.Errorf("%s is a symlink to %s, which is not a modelsdb binary, so it is left alone", link, dest)
+		}
+		if sameFile(link, exe) {
+			return nil
+		}
+	}
+	tmp := link + ".new"
+	os.Remove(tmp)
+	if err := os.Symlink(exe, tmp); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, link); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// sameFile reports whether two paths resolve to the same existing file.
+func sameFile(a, b string) bool {
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	return errA == nil && errB == nil && ra == rb
 }
 
 // removeLink deletes the managed symlink, but only when it is in fact a symlink
@@ -90,7 +127,7 @@ func shellPathStatus(dir string) (bool, string) {
 func installShellPath(dir string) error {
 	rc := shellRcFile()
 	b, _ := os.ReadFile(rc) // a missing file reads as empty, which is fine
-	return os.WriteFile(rc, []byte(rcBlockAdd(string(b), dir)), 0644)
+	return paths.WriteFileAtomic(rc, []byte(rcBlockAdd(string(b), dir)), 0644)
 }
 
 // removeShellPath strips the managed PATH block. dir is unused on Unix.
@@ -104,5 +141,5 @@ func removeShellPath(dir string) error {
 	if out == string(b) {
 		return nil
 	}
-	return os.WriteFile(rc, []byte(out), 0644)
+	return paths.WriteFileAtomic(rc, []byte(out), 0644)
 }

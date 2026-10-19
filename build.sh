@@ -80,71 +80,45 @@ if [ -f "dist/.pid" ]; then
     echo "  -> PID file cleaned up"
 fi
 
-# Secondary measure: kill any process named modelsdb
-echo "  -> Checking for running modelsdb processes by name..."
-if [ "$OS_TYPE" = "windows" ]; then
-    # Windows: use tasklist and taskkill with // syntax
-    MODELSDB_PID=$(tasklist //FI "IMAGENAME eq modelsdb.exe" 2>/dev/null | grep "modelsdb.exe" | awk '{print $2}')
-    if [ -n "$MODELSDB_PID" ]; then
-        echo "  -> Found modelsdb.exe (PID: $MODELSDB_PID), killing..."
-        taskkill //F //PID "$MODELSDB_PID" 2>/dev/null
-        sleep 1
-    fi
-else
-    # Unix/Linux: use pkill or kill based on process name
-    MODELSDB_PIDS=$(pgrep -f "modelsdb$" 2>/dev/null)
-    if [ -n "$MODELSDB_PIDS" ]; then
-        echo "  -> Found modelsdb process(es): $MODELSDB_PIDS"
-        echo "$MODELSDB_PIDS" | while read pid; do
-            kill -9 "$pid" 2>/dev/null
-        done
-        sleep 1
-    fi
-fi
-
-# Also check for any process containing "modelsdb" in its name
-echo "  -> Checking for any modelsdb-related processes..."
-if [ "$OS_TYPE" = "windows" ]; then
-    MODELSDB_ANY=$(tasklist //FI "IMAGENAME eq modelsdb*" 2>/dev/null | grep -i "modelsdb" | head -1 | awk '{print $2}')
-    if [ -n "$MODELSDB_ANY" ]; then
-        echo "  -> Found modelsdb process (PID: $MODELSDB_ANY), killing..."
-        taskkill //F //PID "$MODELSDB_ANY" 2>/dev/null
-    fi
-else
-    # Kill any process with "modelsdb" in the name (except this script)
-    pkill -f "modelsdb" 2>/dev/null
-    sleep 1
-fi
+# Nothing else is stopped here. A sweep by NAME matches every process whose
+# command line contains "modelsdb", which includes a developer instance, an
+# agent's sandbox, and the maintainer's own running server on another port -
+# all of which this build has no business stopping. The PID file above names
+# the one process a build may replace.
+#
+# On Windows a running .exe cannot be overwritten, so the PID-file stop above
+# is what makes the build possible there. On Unix a new file simply replaces
+# the old one and nothing needs stopping at all.
 
 # Inject the app version (single source: the repo-root VERSION file). Data/config/
 # cache paths are resolved at RUNTIME (OS-standard dirs or a config.jsonc), never
 # baked in, so the binary is portable across machines.
 LDFLAGS="-X 'modelsdb/internal/shared.Version=$APP_VERSION'"
 
-# Refresh the embedded seed catalog from the maintainer's live database when it is
-# reachable, so a local release build embeds the freshest catalog. This only fires
-# on a Unix-like shell where an installed 'modelsdb' is on PATH AND its live DB
-# exists; CI / tag builds (no installed binary, no DB) skip it and embed the
-# committed internal/seedcatalog/catalog.json. A failed export is a warning, not a
-# build failure - the committed file is used instead. The already-installed binary
-# is used, never the not-yet-built dist binary.
+# The release binaries are built with -trimpath and CGO off so the same commit and
+# Go toolchain give the same bytes on any machine. `go run ./cmd/sign publish`
+# rebuilds both binaries from the tag's commit with these exact flags and refuses
+# to sign unless the hashes equal CI's. Change a flag here and in
+# cmd/sign/rebuild.go together.
+
 echo ""
-echo "Refreshing embedded seed catalog..."
-SEED_JSON="$PROJECT_ROOT/internal/seedcatalog/catalog.json"
-LIVE_DB="$HOME/.local/share/modelsdb/modelsdb.db"
-if [ "$OS_TYPE" = "unix" ] && command -v modelsdb >/dev/null 2>&1 && [ -f "$LIVE_DB" ]; then
-    if modelsdb export "$SEED_JSON"; then
-        echo "  -> Refreshed $SEED_JSON from the live database"
-    else
-        echo "  -> WARNING: export failed; using the committed catalog"
-    fi
-else
-    echo "  -> No installed modelsdb + live DB; using the committed catalog"
+echo "Minifying static assets..."
+# Regenerates internal/app/static-min/ (git-ignored) from internal/app/static/:
+# app.js and style.css minified, every other file (the vendored jQuery/
+# DataTables bundles, the favicon) copied through unchanged. The -tags
+# minified build below embeds THIS directory instead of static/, so only the
+# shipped binary serves minified assets - the repo's own app.js/style.css
+# stay human-authored and readable. `go run ./cmd/modelsdb` (dev mode) never
+# runs this step and never sees static-min/.
+go run ./cmd/minifyassets
+if [ $? -ne 0 ]; then
+    echo "ERROR: asset minification failed!"
+    exit 1
 fi
 
 echo ""
 echo "Building for Windows (modelsdb.exe)..."
-GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/modelsdb.exe ./cmd/modelsdb
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -tags minified -ldflags "$LDFLAGS" -o dist/modelsdb.exe ./cmd/modelsdb
 if [ $? -ne 0 ]; then
     echo "ERROR: Windows build failed!"
     exit 1
@@ -152,7 +126,7 @@ fi
 echo "  [ok] Windows binary created"
 
 echo "Building for Linux (modelsdb)..."
-GOOS=linux GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/modelsdb ./cmd/modelsdb
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -tags minified -ldflags "$LDFLAGS" -o dist/modelsdb ./cmd/modelsdb
 if [ $? -ne 0 ]; then
     echo "ERROR: Linux build failed!"
     exit 1

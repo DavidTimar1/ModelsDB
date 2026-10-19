@@ -1,113 +1,122 @@
-// Package app handles process logic and functionalities.
+// The rows GET /api/models answers with.
 //
-// processModels reads the single SQLite table and produces the row shape the
-// frontend table expects (modalities joined to "a, b", pricing flattened,
-// curated fields included). No cross-file merging anymore.
+// A ROW IS IDENTITY PLUS CELLS. The model row itself carries only identity - the
+// name every value hangs off, the route that created it, and the reader's own
+// decisions about their table (hidden, and which row sits under which). Every
+// FACT about the model is a cell, and a cell is answered under its column's key
+// with the TEXT the database holds, so what a read gives back is what a write
+// took, with no second lookup and no translation on the way out.
+//
+// IT RETURNS ONE ROW PER STORED MODEL, ALWAYS. It applies no rule about which
+// models deserve to be listed - no name is excluded here, and no row is skipped
+// for what it holds. A row this function withheld would be a row the API cannot
+// return, POST /api/save answers 404 for, and the page cannot draw: it would
+// exist, and be unreachable by every verb this app has. Narrowing a caller's
+// answer belongs to filterAndProject, which reads that request's own parameters.
+
 package app
 
 import (
 	"encoding/json"
-	"modelsdb/internal/dbcore"
-	"modelsdb/internal/shared"
 	"modelsdb/internal/store"
-	"strings"
 )
 
-func joinMods(r map[string]interface{}, key string) string {
-	return strings.Join(dbcore.ParseArr(shared.GetStr(r, key)), ", ")
-}
-
 func processModels() ([]map[string]interface{}, error) {
-	rows, err := dbcore.GetAllModels()
+	identities, err := store.ListModelIdentities()
 	if err != nil {
 		return nil, err
 	}
 
-	// One query for every model's custom-column values (instead of one query per
-	// row), grouped by model name. A model with none gets an empty map, never a
-	// missing key, so the frontend never has to guard against a null.
-	allCustomValues, err := store.AllCustomValues()
+	// One read of the whole cell store and one of every source's verbatim record,
+	// instead of two queries per row. A model with neither gets an empty map,
+	// never a missing key, so nothing reading the answer has to guard against a
+	// null.
+	cells, err := store.AllCells()
+	if err != nil {
+		return nil, err
+	}
+	records, err := store.AllSourceRecords()
+	if err != nil {
+		return nil, err
+	}
+	answeredBy, disputed, overtaken, err := store.AllProvenance()
 	if err != nil {
 		return nil, err
 	}
 
-	merged := make([]map[string]interface{}, 0, len(rows))
-	for _, r := range rows {
-		name := shared.GetStr(r, "name")
-		if name == "" || strings.Contains(strings.ToLower(name), "(free)") {
-			continue
-		}
+	// EVERY STORED ROW IS EMITTED. Which rows a given CALLER receives is decided
+	// afterwards, by filterAndProject, from that request's own parameters.
+	merged := make([]map[string]interface{}, 0, len(identities))
+	for _, identity := range identities {
+		name := identity.Name
 
 		var raw map[string]interface{}
-		if rj := shared.GetStr(r, "raw_json"); rj != "" {
+		if rj := store.RecordOf(records[name], identity.Source); rj != "" {
 			_ = json.Unmarshal([]byte(rj), &raw)
 		}
 
-		row := map[string]interface{}{
-			"id":                 shared.GetStr(r, "id"),
-			"slug":               shared.GetStr(r, "slug"),
-			"name":               name,
-			"description":        shared.GetStr(r, "description"),
-			"created_at":         shared.GetStr(r, "created_at"),
-			"hf_slug":            shared.GetStr(r, "hf_slug"),
-			"context_length":     r["context_length"],
-			"input_modalities":   joinMods(r, "input_modalities"),
-			"output_modalities":  joinMods(r, "output_modalities"),
-			"hidden":             shared.GetNum(r, "hidden") == 1,
-			"supports_reasoning": shared.GetNum(r, "supports_reasoning") == 1,
-			"zdr":                shared.GetNum(r, "zdr") == 1,
+		merged = append(merged, map[string]interface{}{
+			"name":   name,
+			"source": identity.Source,
 
-			"prompt":             shared.GetStr(r, "price_prompt"),
-			"completion":         shared.GetStr(r, "price_completion"),
-			"image":              shared.GetStr(r, "price_image"),
-			"audio":              shared.GetStr(r, "price_audio"),
-			"internal_reasoning": shared.GetStr(r, "price_internal_reasoning"),
-			"price_display":      shared.GetStr(r, "price_display"),
-			"pricing_url":        shared.GetStr(r, "pricing_url"),
-			"measurement":        shared.GetStr(r, "measurement"),
-			"pricing_note":       shared.GetStr(r, "pricing_note"),
+			// Hidden: the row is kept here in full, and left out of what is shown.
+			// The flag is emitted on every row; deciding which rows a CALLER
+			// receives is filterAndProject's job, because that is where the
+			// request's own include_hidden parameter is read.
+			"hidden": identity.Hidden,
 
-			"notes":             shared.GetStr(r, "notes"),
-			"favorite":          shared.GetNum(r, "favorite"),
-			"tool":              shared.GetStr(r, "tool"),
-			"moe":               shared.GetStr(r, "moe"),
-			"parameters":        r["parameters"],
-			"active_parameters": r["active_parameters"],
-			"disk_size_gb":      r["disk_size_gb"],
+			// A VARIATION of another model - one quantized build, recorded as a row
+			// of its own. variant_of names the model it was built from and is empty
+			// on every ordinary row, so it is what tells the two kinds of row apart.
+			"variant_of": identity.VariantOf,
 
-			// New, additive fields (frontend may ignore them safely).
-			"model_type":  shared.GetStr(r, "model_type"),
-			"source":      shared.GetStr(r, "source"),
-			"collections": dbcore.ParseArr(shared.GetStr(r, "collections")),
+			// Every fact, under its column's key, as the text the database holds.
+			"cells": cellsOrEmpty(cells[name]),
 
-			// User-defined personal columns (the generic replacement for the old
-			// fixed Speed/Rating/OCR fields): this model's stored value per column
-			// id, e.g. {"3": "fast"}. A column this model has no value for is
-			// simply absent from the map.
-			"custom_values": customValuesOrEmpty(allCustomValues[name]),
+			// Which source's answer won each column - "hand" in a column of the
+			// reader's own, a source's own name otherwise, "merged" for a
+			// union-resolve column an automatic source contributed to.
+			"answered_by": answeredByOrEmpty(answeredBy[name]),
+
+			// Which columns have OpenRouter and HuggingFace disagreeing on this
+			// model's value. Nothing settles it; the column's order decides.
+			"disputed": disputedOrEmpty(disputed[name]),
+
+			// Which columns hold a researched value an automatic source has since
+			// overtaken: still stored, no longer shown, and the one research cell
+			// the page offers to clear from a read-only field.
+			"overtaken": disputedOrEmpty(overtaken[name]),
 
 			"_raw": raw,
-		}
-
-		if row["tool"] == "" {
-			row["tool"] = "no"
-		}
-		if row["moe"] == "" {
-			row["moe"] = "unknown"
-		}
-
-		merged = append(merged, row)
+		})
 	}
 
 	return merged, nil
 }
 
-// customValuesOrEmpty normalizes a missing custom-values map to an empty (but
-// non-nil) one, so processModels always emits a `custom_values` object in the
-// JSON response rather than `null` for a model with no custom-column values.
-func customValuesOrEmpty(m map[int64]string) map[int64]string {
-	if m == nil {
-		return map[int64]string{}
+// cellsOrEmpty normalizes a model with no stored value at all to an empty (but
+// non-nil) map, so every row carries a cells object rather than a null.
+func cellsOrEmpty(held map[string]string) map[string]string {
+	if held == nil {
+		return map[string]string{}
 	}
-	return m
+	return held
+}
+
+// answeredByOrEmpty applies the same never-null rule as cellsOrEmpty to the
+// answered_by map: a model with no cell at all still carries an empty object.
+func answeredByOrEmpty(held map[string]string) map[string]string {
+	if held == nil {
+		return map[string]string{}
+	}
+	return held
+}
+
+// disputedOrEmpty applies the same never-null rule as cellsOrEmpty to the
+// disputed map.
+func disputedOrEmpty(held map[string]bool) map[string]bool {
+	if held == nil {
+		return map[string]bool{}
+	}
+	return held
 }

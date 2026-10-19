@@ -344,7 +344,7 @@ func TestBindExposure(t *testing.T) {
 		{"::1", "loopback"},
 		{"0.0.0.0", "wildcard"},
 		{"::", "wildcard"},
-		{"100.85.27.66", "tailscale"},
+		{"100.64.0.10", "tailscale"},
 		{"192.168.1.5", "private"},
 		{"10.0.0.1", "private"},
 		{"172.16.0.1", "private"},
@@ -537,4 +537,166 @@ func TestResolvePort(t *testing.T) {
 			t.Errorf("unparseable flag should fall back to config, got %d", Port)
 		}
 	})
+}
+
+// TestResolveAllowedOrigins covers first-hit-wins resolution (env replaces the
+// file list, never merges with it), that a malformed entry is dropped rather
+// than failing startup, and that the dropped count is exact.
+func TestResolveAllowedOrigins(t *testing.T) {
+	origCfg, origOrigins, origDropped := AppConfig.AllowedOrigins, AllowedOrigins, AllowedOriginsDropped
+	t.Cleanup(func() {
+		AppConfig.AllowedOrigins, AllowedOrigins, AllowedOriginsDropped = origCfg, origOrigins, origDropped
+	})
+
+	t.Run("empty by default", func(t *testing.T) {
+		t.Setenv("MODELSDB_ALLOWED_ORIGINS", "")
+		AppConfig.AllowedOrigins = nil
+		resolveAllowedOrigins()
+		if len(AllowedOrigins) != 0 {
+			t.Errorf("AllowedOrigins = %v, want empty", AllowedOrigins)
+		}
+		if AllowedOriginsDropped != 0 {
+			t.Errorf("AllowedOriginsDropped = %d, want 0", AllowedOriginsDropped)
+		}
+	})
+	t.Run("config file list is normalized", func(t *testing.T) {
+		t.Setenv("MODELSDB_ALLOWED_ORIGINS", "")
+		AppConfig.AllowedOrigins = []string{"https://models.example.com"}
+		resolveAllowedOrigins()
+		want := []string{"https://models.example.com:443"}
+		if !slices.Equal(AllowedOrigins, want) {
+			t.Errorf("AllowedOrigins = %v, want %v", AllowedOrigins, want)
+		}
+	})
+	t.Run("env replaces file list, does not merge", func(t *testing.T) {
+		t.Setenv("MODELSDB_ALLOWED_ORIGINS", "http://100.64.0.10:8122,https://other.example.com")
+		AppConfig.AllowedOrigins = []string{"https://models.example.com"}
+		resolveAllowedOrigins()
+		want := []string{"http://100.64.0.10:8122", "https://other.example.com:443"}
+		if !slices.Equal(AllowedOrigins, want) {
+			t.Errorf("AllowedOrigins = %v, want %v (env should replace, not add to, the file list)", AllowedOrigins, want)
+		}
+	})
+	t.Run("malformed entry dropped, app still starts, count exact", func(t *testing.T) {
+		t.Setenv("MODELSDB_ALLOWED_ORIGINS", "")
+		AppConfig.AllowedOrigins = []string{"https://good.example.com", "not-a-url-at-all::::", "*.example.com"}
+		resolveAllowedOrigins()
+		if len(AllowedOrigins) != 1 || AllowedOrigins[0] != "https://good.example.com:443" {
+			t.Errorf("AllowedOrigins = %v, want only the good entry kept", AllowedOrigins)
+		}
+		if AllowedOriginsDropped != 2 {
+			t.Errorf("AllowedOriginsDropped = %d, want 2", AllowedOriginsDropped)
+		}
+	})
+}
+
+// TestSaveConfigFileCarriesAllowedOriginsThrough is the spec.md acceptance
+// criterion: SaveConfigFile (also reached from SaveBackupSettings, the Info
+// dialog's write path) rewrites the whole file from AppConfig, and a hand-set
+// allowed_origins list must survive that rewrite unchanged, because it is
+// never itself editable through that dialog or any other HTTP path.
+func TestSaveConfigFileCarriesAllowedOriginsThrough(t *testing.T) {
+	origConfigFile, origAppConfig := ConfigFile, AppConfig
+	t.Cleanup(func() { ConfigFile, AppConfig = origConfigFile, origAppConfig })
+
+	ConfigFile = filepath.Join(t.TempDir(), "config.jsonc")
+	AppConfig = fileConfig{AllowedOrigins: []string{"http://100.64.0.10:8122", "https://models.example.com"}}
+	if err := SaveConfigFile(); err != nil {
+		t.Fatalf("SaveConfigFile: %v", err)
+	}
+
+	reloaded, ok := loadConfigFile(ConfigFile)
+	if !ok {
+		t.Fatal("loadConfigFile could not read back what SaveConfigFile wrote")
+	}
+	want := []string{"http://100.64.0.10:8122", "https://models.example.com"}
+	if !slices.Equal(reloaded.AllowedOrigins, want) {
+		t.Errorf("allowed_origins after save+reload = %v, want %v unchanged", reloaded.AllowedOrigins, want)
+	}
+}
+
+// TestNormalizeOrigin covers every accepted shape and every rejection reason
+// named in wording.md, including the specific attacks security-review.md
+// names: a scheme mismatch, a port mismatch, and a malformed entry.
+func TestNormalizeOrigin(t *testing.T) {
+	cases := []struct {
+		name   string
+		in     string
+		norm   string
+		ok     bool
+		reason string
+	}{
+		{"http default port implied", "http://example.com", "http://example.com:80", true, ""},
+		{"https default port implied", "https://example.com", "https://example.com:443", true, ""},
+		{"explicit non-default port kept", "http://100.64.0.10:8122", "http://100.64.0.10:8122", true, ""},
+		{"trailing slash stripped", "https://example.com/", "https://example.com:443", true, ""},
+		{"host lowercased", "https://Example.COM", "https://example.com:443", true, ""},
+		{"scheme lowercased", "HTTPS://example.com", "https://example.com:443", true, ""},
+		{"no scheme", "example.com", "", false, "no scheme"},
+		{"scheme must be http or https", "ftp://example.com", "", false, "scheme must be http or https"},
+		{"has a path", "https://example.com/api", "", false, "has a path"},
+		{"has a query", "https://example.com?x=1", "", false, "has a query"},
+		{"has a fragment", "https://example.com#x", "", false, "has a fragment"},
+		{"has userinfo", "https://user:pass@example.com", "", false, "has userinfo"},
+		{"wildcard rejected", "https://*.example.com", "", false, "not a valid origin"},
+		{"whitespace rejected", "https://example .com", "", false, "not a valid origin"},
+		{"empty string rejected", "", "", false, "no scheme"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			norm, ok, reason := normalizeOrigin(c.in)
+			if norm != c.norm || ok != c.ok || reason != c.reason {
+				t.Errorf("normalizeOrigin(%q) = (%q, %v, %q), want (%q, %v, %q)",
+					c.in, norm, ok, reason, c.norm, c.ok, c.reason)
+			}
+		})
+	}
+}
+
+// TestOriginListed covers the actual comparison originAllowed relies on:
+// exact match after normalization, and the attacks security-review.md names
+// (a suffix that must not match, a scheme mismatch, a port mismatch).
+func TestOriginListed(t *testing.T) {
+	orig := AllowedOrigins
+	t.Cleanup(func() { AllowedOrigins = orig })
+	AllowedOrigins = []string{"https://models.example.com:443", "http://100.64.0.10:8122"}
+
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"exact match", "https://models.example.com", true},
+		{"exact match with explicit default port", "https://models.example.com:443", true},
+		{"non-default port entry matches without port omitted", "http://100.64.0.10:8122", true},
+		{"suffix does not match", "https://evil-models.example.com", false},
+		{"suffix appended does not match", "https://models.example.com.evil.com", false},
+		{"scheme mismatch does not match", "http://models.example.com", false},
+		{"port mismatch does not match", "https://models.example.com:8443", false},
+		{"unlisted host does not match", "https://other.example.com", false},
+		{"malformed entry never matches", "not-a-url", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := OriginListed(c.in); got != c.want {
+				t.Errorf("OriginListed(%q) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+func TestIsGoBuildPath(t *testing.T) {
+	for p, want := range map[string]bool{
+		"/tmp/go-build1234/b001/exe/modelsdb":             true,
+		`D:\build\cache\go-build99\b001\exe\modelsdb.exe`: true,
+		"/tmp/modelsdb":               false,
+		`D:\build\cache\modelsdb.exe`: false,
+		"/srv/apps/modelsdb":          false,
+		"/opt/temp/modelsdb":          false,
+		"":                            false,
+	} {
+		if got := isGoBuildPath(p); got != want {
+			t.Errorf("isGoBuildPath(%q) = %v, want %v", p, got, want)
+		}
+	}
 }

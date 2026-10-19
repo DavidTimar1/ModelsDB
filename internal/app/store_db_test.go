@@ -1,12 +1,14 @@
 package app
 
 import (
-	"database/sql"
+	"errors"
 	"modelsdb/internal/catalog"
 	"modelsdb/internal/dbcore"
 	"modelsdb/internal/paths"
 	"modelsdb/internal/store"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -29,22 +31,62 @@ func migratedDB(t *testing.T) {
 	})
 }
 
+// cellValue answers what one column holds for one model, by the column's own
+// key. It is what a test asks when the question is about a particular column
+// rather than about what the catalog says.
+func cellValue(t *testing.T, model, key string) string {
+	t.Helper()
+	cells, err := store.ModelCells(model)
+	if err != nil {
+		t.Fatalf("read the cells of %q: %v", model, err)
+	}
+	return cells[key]
+}
+
+// colStr answers what one model's field reads as, wherever it is stored now.
+//
+// A model row holds its IDENTITY and nothing else, so what it still carries is
+// read off the row and every FACT is read out of the cell store. Three assertions
+// still go by the short names they were first written under, which colStrAliases
+// maps to the column keys.
 func colStr(t *testing.T, name, col string) string {
 	t.Helper()
-	var s string
-	if err := dbcore.DB.QueryRow("SELECT "+col+" FROM models WHERE name=?", name).Scan(&s); err != nil {
-		t.Fatalf("read %s.%s: %v", name, col, err)
+	switch col {
+	case "name", "source", "variant_of":
+		var s string
+		if err := dbcore.DB.QueryRow("SELECT "+col+" FROM models WHERE name=?", name).Scan(&s); err != nil {
+			t.Fatalf("read %s.%s: %v", name, col, err)
+		}
+		return s
+	case "hidden":
+		var n int
+		if err := dbcore.DB.QueryRow("SELECT hidden FROM models WHERE name=?", name).Scan(&n); err != nil {
+			t.Fatalf("read %s.hidden: %v", name, err)
+		}
+		return strconv.Itoa(n)
 	}
-	return s
+	if key, aliased := colStrAliases[col]; aliased {
+		col = key
+	}
+	value := cellValue(t, name, col)
+	if col == "favorite" || col == "supports_reasoning" {
+		// These two assertions read a flag as 1 or 0.
+		switch strings.ToLower(value) {
+		case "yes", "true", "1":
+			return "1"
+		}
+		return "0"
+	}
+	return value
 }
+
+// colStrAliases maps the short names some assertions use to the column keys.
+var colStrAliases = map[string]string{"tool": "supports_tools", "hf_slug": "repository", "measurement": "price_unit"}
 
 func colInt(t *testing.T, name, col string) int64 {
 	t.Helper()
-	var v sql.NullInt64
-	if err := dbcore.DB.QueryRow("SELECT "+col+" FROM models WHERE name=?", name).Scan(&v); err != nil {
-		t.Fatalf("read %s.%s: %v", name, col, err)
-	}
-	return v.Int64
+	figure, _ := strconv.ParseFloat(strings.TrimSpace(colStr(t, name, col)), 64)
+	return int64(figure)
 }
 
 func TestUpsertAPIModelInsertAndPreserveCurated(t *testing.T) {
@@ -55,7 +97,7 @@ func TestUpsertAPIModelInsertAndPreserveCurated(t *testing.T) {
 		"supported_parameters": []interface{}{"tools"},
 		"pricing":              map[string]interface{}{"prompt": "0.000003", "completion": "0.000015"},
 	})
-	if err := store.UpsertAPIModel(norm); err != nil {
+	if _, err := store.UpsertAPIModel(norm); err != nil {
 		t.Fatalf("upsertAPIModel: %v", err)
 	}
 
@@ -74,31 +116,38 @@ func TestUpsertAPIModelInsertAndPreserveCurated(t *testing.T) {
 	if got := colStr(t, "OpenAI: GPT-5", "measurement"); got != "per 1M tokens" {
 		t.Errorf("measurement seed = %q", got)
 	}
-	if n, ok := store.FindNameByID("openai/gpt-5"); !ok || n != "OpenAI: GPT-5" {
-		t.Errorf("findNameByID = %q,%v", n, ok)
+	if n, ok, err := store.FindNameByCell([]string{"id"}, "openai/gpt-5", false); err != nil || !ok || n != "OpenAI: GPT-5" {
+		t.Errorf("FindNameByCell = %q,%v,%v", n, ok, err)
 	}
 
-	// Lay down curated values, then re-upsert with changed metadata: the curated
-	// columns must survive while metadata refreshes.
-	if err := store.UpdateCurated("OpenAI: GPT-5", map[string]interface{}{"tool": "yes", "notes": "great"}); err != nil {
-		t.Fatalf("updateCurated: %v", err)
+	// Lay down a note and a researched value in a column the feed did not
+	// state, then re-upsert with changed metadata: both survive while the
+	// metadata refreshes, and a column the feed states cannot be typed over.
+	if err := store.SaveCells("OpenAI: GPT-5", map[string]string{"expiration_date": "2027-01-01", "notes": "great"}); err != nil {
+		t.Fatalf("SaveCells: %v", err)
+	}
+	if err := store.SaveCells("OpenAI: GPT-5", map[string]string{"supports_tools": "no"}); !errors.Is(err, store.ErrNotWritable) {
+		t.Errorf("typing over the feed's tool answer: err = %v, want ErrNotWritable", err)
 	}
 	norm2 := catalog.NormalizeModel(map[string]interface{}{
 		"name": "OpenAI: GPT-5", "id": "openai/gpt-5", "description": "second",
 		"architecture": map[string]interface{}{"output_modalities": []interface{}{"text"}},
 		"pricing":      map[string]interface{}{"prompt": "0.000003", "completion": "0.000015"},
 	})
-	if err := store.UpsertAPIModel(norm2); err != nil {
+	if _, err := store.UpsertAPIModel(norm2); err != nil {
 		t.Fatalf("re-upsert: %v", err)
 	}
 	if got := colStr(t, "OpenAI: GPT-5", "description"); got != "second" {
 		t.Errorf("description should refresh on re-upsert, got %q", got)
 	}
-	if got := colStr(t, "OpenAI: GPT-5", "tool"); got != "yes" {
-		t.Errorf("curated tool must survive re-upsert, got %q", got)
+	if got := colStr(t, "OpenAI: GPT-5", "tool"); got != "no" {
+		t.Errorf("tool after a re-upsert that saw no tools = %q, want the feed's no", got)
 	}
 	if got := colStr(t, "OpenAI: GPT-5", "notes"); got != "great" {
-		t.Errorf("curated notes must survive re-upsert, got %q", got)
+		t.Errorf("the note must survive a re-upsert, got %q", got)
+	}
+	if got := cellValue(t, "OpenAI: GPT-5", "expiration_date"); got != "2027-01-01" {
+		t.Errorf("a researched value in a column the feed never states must survive a re-upsert, got %q", got)
 	}
 }
 
@@ -106,9 +155,7 @@ func TestImportFullRecord(t *testing.T) {
 	migratedDB(t)
 	rec := map[string]interface{}{
 		"name": "Qwen: Qwen3 HF", "source": "huggingface", "hf_slug": "Qwen/Qwen3",
-		"author": "Qwen", "description": "MoE model", "parameters": float64(235),
-		"active_parameters": float64(22), "moe": "yes", "notes": "hf note",
-		"price_display": "HF-only", "measurement": "per second",
+		"description": "MoE model", "moe": "yes",
 		"input_modalities": []interface{}{"text"}, "output_modalities": []interface{}{"text"},
 	}
 	if err := store.ImportFullRecord(rec, "huggingface", "chat"); err != nil {
@@ -117,48 +164,30 @@ func TestImportFullRecord(t *testing.T) {
 	if got := colStr(t, "Qwen: Qwen3 HF", "source"); got != "huggingface" {
 		t.Errorf("source = %q", got)
 	}
-	if got := colInt(t, "Qwen: Qwen3 HF", "parameters"); got != 235 {
-		t.Errorf("parameters = %d, want 235", got)
+	if got := colStr(t, "Qwen: Qwen3 HF", "moe"); got != "yes" {
+		t.Errorf("moe = %q, want yes", got)
 	}
-	if got := colStr(t, "Qwen: Qwen3 HF", "notes"); got != "hf note" {
-		t.Errorf("notes = %q", got)
+	if got := colStr(t, "Qwen: Qwen3 HF", "hf_slug"); got != "Qwen/Qwen3" {
+		t.Errorf("hf_slug = %q", got)
 	}
-	if got := colStr(t, "Qwen: Qwen3 HF", "measurement"); got != "per second" {
-		t.Errorf("measurement = %q", got)
+	// A record from a route that reads none is refused, and creates nothing.
+	if err := store.ImportFullRecord(map[string]interface{}{"name": "Nobody: Reads This"}, "collection", "chat"); err == nil {
+		t.Error("a record stamped with a source that reads no record was accepted")
 	}
-}
-
-func TestSetPricingPreservesUnitOnEmpty(t *testing.T) {
-	migratedDB(t)
-	// Minimal row via updateCurated, then price it.
-	if err := store.UpdateCurated("Veo", map[string]interface{}{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetPricing("Veo", "", "0.10", "", "Video: $0.10/second", "https://openrouter.ai/veo", "per second"); err != nil {
-		t.Fatalf("setPricing: %v", err)
-	}
-	if got := colStr(t, "Veo", "price_completion"); got != "0.10" {
-		t.Errorf("price_completion = %q", got)
-	}
-	if got := colStr(t, "Veo", "measurement"); got != "per second" {
-		t.Errorf("measurement = %q", got)
-	}
-	// A re-price with an empty measurement must NOT clear the existing unit.
-	if err := store.SetPricing("Veo", "", "0.12", "", "Video: $0.12/second", "https://openrouter.ai/veo", ""); err != nil {
-		t.Fatalf("re-setPricing: %v", err)
-	}
-	if got := colStr(t, "Veo", "measurement"); got != "per second" {
-		t.Errorf("empty measurement should preserve prior unit, got %q", got)
+	if store.ModelExists("Nobody: Reads This") {
+		t.Error("the refused record created a row")
 	}
 }
 
-func TestSaveCuratedPreservesOmittedFields(t *testing.T) {
+// TestASavePreservesOmittedFields: a save names only the cells it changes, and
+// every other cell on the row stays as it was.
+func TestASavePreservesOmittedFields(t *testing.T) {
 	migratedDB(t)
-	if err := store.UpdateCurated("M", map[string]interface{}{"notes": "keep me", "tool": "no"}); err != nil {
+	if err := store.AddModelWithCells("M", map[string]string{"notes": "keep me", "supports_tools": "no"}); err != nil {
 		t.Fatal(err)
 	}
-	// Save only a new tool value; notes must be preserved (read-modify-write merge).
-	if err := store.SaveCurated("M", map[string]interface{}{"tool": "yes"}); err != nil {
+	// Save only a new tool value (research over research); notes must be preserved.
+	if err := store.SaveCells("M", map[string]string{"supports_tools": "yes"}); err != nil {
 		t.Fatalf("saveCurated: %v", err)
 	}
 	if got := colStr(t, "M", "tool"); got != "yes" {

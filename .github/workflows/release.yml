@@ -4,7 +4,8 @@
 # matches the VERSION file, so the tag, the binary's stamped version (build.sh
 # injects VERSION via -ldflags), and VERSION itself can never drift apart.
 #
-# See README "Cutting a release" for how a maintainer triggers this.
+# This workflow creates a DRAFT release and holds no signing key. See README
+# "Building and releasing" for the local sign-and-publish step.
 name: Release
 
 on:
@@ -43,19 +44,14 @@ jobs:
         run: bash build.sh
 
       - name: Checksums for the release assets
+        # Stable, version-less asset names (modelsdb.exe / modelsdb) so users can
+        # download and overwrite their existing binary in place. SHA256SUMS starts
+        # with a "# version:" line; the maintainer signs the file on their own
+        # machine (go run ./cmd/sign publish), so this job holds no signing key.
         run: |
-          # Stable, version-less asset names (modelsdb.exe / modelsdb) so users
-          # can download and overwrite their existing binary in place.
-          ( cd dist && sha256sum modelsdb.exe modelsdb > SHA256SUMS && cat SHA256SUMS )
-
-      - name: Sign SHA256SUMS (self-update trust anchor)
-        # The in-app self-update verifies this ed25519 signature (with the public
-        # key embedded in internal/selfupdate/pubkey.go) before trusting a
-        # downloaded binary. MODELSDB_SIGN_KEY is the base64 private key repo
-        # secret. It never prints the key; it only writes dist/SHA256SUMS.sig.
-        env:
-          MODELSDB_SIGN_KEY: ${{ secrets.MODELSDB_SIGN_KEY }}
-        run: go run ./cmd/sign sums dist/SHA256SUMS
+          v="${GITHUB_REF_NAME#v}"
+          go run ./cmd/sign sums -version "$v" -out dist/SHA256SUMS dist/modelsdb.exe dist/modelsdb
+          cat dist/SHA256SUMS
 
       - name: Extract release notes from CHANGELOG
         run: |
@@ -68,12 +64,14 @@ jobs:
           if [ ! -s RELEASE_NOTES.md ]; then echo "Release v$v" > RELEASE_NOTES.md; fi
           echo "--- release notes ---"; cat RELEASE_NOTES.md
 
-      - name: Publish release
+      - name: Create draft release
+        # A DRAFT: the in-app update never sees it. The maintainer rebuilds from
+        # the tag's commit, signs SHA256SUMS and publishes with cmd/sign publish.
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
+          draft: true
           body_path: RELEASE_NOTES.md
           files: |
             dist/modelsdb.exe
             dist/modelsdb
             dist/SHA256SUMS
-            dist/SHA256SUMS.sig

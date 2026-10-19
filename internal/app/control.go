@@ -1,8 +1,9 @@
-// Package app - process control: the interactive menu and the start/stop/status
+// Process control: the interactive menu and the start/stop/status
 // subcommands that manage a background server. These let a released user run the
 // server in the background without any external scripts. The menu appears when
 // the binary is launched in a terminal with no subcommand; the subcommands
 // (serve/start/stop/status) are the script-friendly equivalents.
+
 package app
 
 import (
@@ -13,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -47,19 +49,39 @@ func loopbackURL() string {
 	return fmt.Sprintf("http://127.0.0.1:%d", paths.Port)
 }
 
+// backgroundWatch is how long a background start watches its child before it
+// reports success. A start that cannot go on (a database below the schema floor,
+// a port taken between the check and the bind, a bad setting) ends the child
+// within a moment of launch, long before this passes, so a child still alive
+// after it is serving or is migrating a large database. The wait never covers the
+// catalog refresh: the child answers 503 "starting" for minutes after the port is
+// bound, and that is a healthy start.
+const backgroundWatch = 3 * time.Second
+
+// logLineStamp matches the date, time and source position the standard logger
+// puts in front of a line, so the text of a failed start reads as the foreground
+// start prints it.
+var logLineStamp = regexp.MustCompile(`(?m)^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} \S+:\d+: `)
+
 // startBackground launches the server as a detached child process and returns to
 // the shell. It refuses if a server is already bound to the port. The child runs
-// "serve" and writes its own PID file, so stop/status find it.
-func startBackground() {
+// "serve" and writes its own PID file, so stop/status find it. It reports whether
+// the start FAILED: a child that ends within backgroundWatch is a failed start,
+// and the reason the child logged is printed here, because the child's own output
+// goes to the log file and a person told "started" would never open it.
+func startBackground() (failed bool) {
 	if shared.PortInUse(paths.Port) {
 		fmt.Printf("A server is already running on port %d. Use 'stop' first, or 'status' to check.\n", paths.Port)
-		return
+		return false
 	}
 	exe, err := os.Executable()
 	if err != nil {
 		fmt.Printf("Cannot locate this executable to relaunch it: %v\n", err)
-		return
+		return true
 	}
+
+	logPath := filepath.Join(paths.LogsDir, "modelsdb.log")
+	logStart := logSize(logPath)
 
 	child := exec.Command(exe, serveArgs()...)
 	child.Env = os.Environ()
@@ -72,70 +94,118 @@ func startBackground() {
 	}
 	if err := child.Start(); err != nil {
 		fmt.Printf("Failed to start background server: %v\n", err)
-		return
+		return true
 	}
-	// Capture the PID before releasing: Release invalidates the Process handle
-	// and resets its Pid to -1.
 	pid := child.Process.Pid
-	// Release so this process does not remain the child's parent/waiter.
-	_ = child.Process.Release()
+
+	// Wait in the background so the child is reaped whenever it ends and so this
+	// process can see an early exit. The wait is never released: Release would
+	// hide the exit this function is looking for.
+	ended := make(chan error, 1)
+	go func() { ended <- child.Wait() }()
+	select {
+	case waitErr := <-ended:
+		fmt.Printf("ModelsDB did not start: the background server (pid %d) ended right after launch.\n", pid)
+		if text := logSince(logPath, logStart); text != "" {
+			fmt.Println()
+			fmt.Println(text)
+		} else if waitErr != nil {
+			fmt.Printf("  It reported: %v\n", waitErr)
+		}
+		fmt.Printf("  Full log: %s\n", logPath)
+		return true
+	case <-time.After(backgroundWatch):
+	}
 
 	fmt.Printf("Started ModelsDB in the background (pid %d).\n", pid)
 	fmt.Printf("  UI:   %s\n", loopbackURL())
-	fmt.Printf("  Logs: %s\n", filepath.Join(paths.LogsDir, "modelsdb.log"))
+	fmt.Printf("  Logs: %s\n", logPath)
 	fmt.Printf("  Stop: %s stop\n", filepath.Base(exe))
+	return false
 }
 
-// stopBackground stops a running server. It uses the bound port as the "is a
-// server running" signal and the PID file to know which process to stop.
-func stopBackground() {
-	if !shared.PortInUse(paths.Port) {
-		fmt.Printf("No server is running on port %d.\n", paths.Port)
-		return
-	}
-	inst, ok := shared.ReadInstance()
-	if !ok {
-		fmt.Printf("Port %d is in use but no PID file was found - another (non-ModelsDB) process may hold it. Not stopping it.\n", paths.Port)
-		return
-	}
-	// Refuse when the record describes a server on a different port: that instance
-	// is not the one holding this port, so its PID is not ours to kill.
-	if inst.Port != paths.Port {
-		fmt.Printf("Port %d is in use, but the PID file records %s. Not stopping it.\n", paths.Port, inst.Describe())
-		return
-	}
-	proc, err := os.FindProcess(inst.PID)
+// logSize is the current size of the log file, or 0 when there is none yet.
+func logSize(path string) int64 {
+	info, err := os.Stat(path)
 	if err != nil {
-		fmt.Printf("Recorded process %d is not available: %v\n", inst.PID, err)
+		return 0
+	}
+	return info.Size()
+}
+
+// logSince returns what the log gained after offset, without the logger's
+// per-line stamp, trimmed. A file smaller than offset was rotated, so it is
+// read from the start.
+func logSince(path string, offset int64) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	if offset > int64(len(data)) {
+		offset = 0
+	}
+	text := logLineStamp.ReplaceAllString(string(data[offset:]), "")
+	return strings.TrimSpace(text)
+}
+
+// stopBackground stops the running server. It asks the PORT who is serving
+// there - the server names its own process in its health reply - and falls back
+// to the PID file only when nothing answers. That ordering is the point: a
+// server must always be stoppable while it is demonstrably serving, whatever the
+// recorded file happens to say. When the port is held by something this install
+// may not stop, it says exactly what it found and stops nothing.
+func stopBackground() {
+	h := shared.InspectPort(paths.Port)
+	if !h.Bound {
+		fmt.Printf("No server is running on port %d.\n", paths.Port)
+		// A record left by a start that died names nothing that serves. Clear it,
+		// so the next status or start is not misled by it.
+		if inst, ok := shared.ReadInstance(); ok && inst.Port == paths.Port {
+			if err := os.Remove(shared.PidFilePath()); err == nil {
+				fmt.Printf("Cleared a leftover PID file that recorded %s.\n", inst.Describe())
+			}
+		}
+		return
+	}
+	if !h.Ours {
+		fmt.Printf("%s. Not stopping it.\n", h.Why)
+		return
+	}
+	if h.Source == "server" {
+		if inst, ok := shared.ReadInstance(); !ok || inst.PID != h.Inst.PID {
+			fmt.Printf("The PID file does not name the server holding port %d; using the server's own answer (%s).\n", paths.Port, h.Inst.Describe())
+		}
+	}
+	proc, err := os.FindProcess(h.Inst.PID)
+	if err != nil {
+		fmt.Printf("Process %d is not available: %v\n", h.Inst.PID, err)
 		return
 	}
 	if err := proc.Kill(); err != nil {
-		fmt.Printf("Could not stop process %d: %v\n", inst.PID, err)
+		fmt.Printf("Could not stop process %d: %v\n", h.Inst.PID, err)
 		return
 	}
-	for i := 0; i < 50 && shared.PortInUse(paths.Port); i++ {
-		time.Sleep(100 * time.Millisecond)
-	}
-	if shared.PortInUse(paths.Port) {
-		fmt.Printf("Sent stop to pid %d, but port %d is still busy.\n", inst.PID, paths.Port)
+	if !shared.WaitForPortFree(paths.Port, 5*time.Second) {
+		fmt.Printf("Sent stop to pid %d, but port %d is still busy.\n", h.Inst.PID, paths.Port)
 		return
 	}
 	_ = os.Remove(shared.PidFilePath())
-	fmt.Printf("Stopped ModelsDB (pid %d).\n", inst.PID)
+	fmt.Printf("Stopped ModelsDB (pid %d).\n", h.Inst.PID)
 }
 
 // printStatus reports whether a server is running and where it is reachable. When
 // offerOpen is true (the interactive menu) and a server is running, it offers to
 // open the UI in the default browser.
 func printStatus(offerOpen bool) {
-	if !shared.PortInUse(paths.Port) {
+	h := shared.InspectPort(paths.Port)
+	if !h.Bound {
 		fmt.Printf("ModelsDB is NOT running (port %d is free).\n", paths.Port)
 		return
 	}
-	if inst, ok := shared.ReadInstance(); ok && inst.Port == paths.Port {
-		fmt.Printf("ModelsDB is RUNNING: %s.\n", inst.Describe())
+	if h.Ours {
+		fmt.Printf("ModelsDB is RUNNING: %s.\n", h.Inst.Describe())
 	} else {
-		fmt.Printf("Port %d is in use (no matching PID file - it may be a non-ModelsDB process).\n", paths.Port)
+		fmt.Printf("%s.\n", h.Why)
 	}
 	fmt.Println("  Addresses:")
 	for _, addr := range bindAddrs(paths.Host, paths.Port) {
@@ -193,8 +263,6 @@ func promptYesNo(question string) bool {
 	return answer == "y" || answer == "yes"
 }
 
-// runMenu drives the interactive process-control menu. It loops until the user
-// starts the server in the foreground (which takes over this process) or quits.
 // menuRule prints a horizontal divider with surrounding blank lines. It runs
 // between a finished action's output and the next menu redraw, so the fresh
 // output stands apart from what scrolled past before it instead of merging into
@@ -205,15 +273,17 @@ func menuRule() {
 	fmt.Println()
 }
 
+// runMenu drives the interactive process-control menu. It loops until the user
+// starts the server in the foreground (which takes over this process) or quits.
 func runMenu() {
 	first := true
 	for {
 		state := "stopped"
-		if shared.PortInUse(paths.Port) {
-			if inst, ok := shared.ReadInstance(); ok && inst.Port == paths.Port {
-				state = fmt.Sprintf("running, pid %d", inst.PID)
+		if h := shared.InspectPort(paths.Port); h.Bound {
+			if h.Known {
+				state = fmt.Sprintf("running, pid %d", h.Inst.PID)
 			} else {
-				state = "running"
+				state = "port taken"
 			}
 		}
 		if first {
@@ -239,7 +309,7 @@ func runMenu() {
 		}
 		switch strings.TrimSpace(line) {
 		case "1":
-			startBackground()
+			startBackground() // prints its own failure; the menu carries on
 		case "2":
 			stopBackground()
 		case "3":

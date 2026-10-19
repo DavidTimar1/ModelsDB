@@ -24,14 +24,14 @@ const (
 	// "ModelsDB".
 	appName = "modelsdb"
 
-	// legacyAppName is the capitalized directory leaf older builds used. Startup
-	// migrates such a directory to appName once (see migrateLegacyDir), so an
-	// existing install's data is not orphaned when the leaf lowercases.
+	// legacyAppName is the capitalized directory leaf some early builds used.
+	// Startup renames such a directory to appName once (see migrateLegacyDir), so
+	// that install's data is not orphaned.
 	legacyAppName = "ModelsDB"
 
 	// configFileName is the CANONICAL config file: the name written on first run and
-	// used when none exists yet. On read the app also accepts a legacy "config.json"
-	// of the same shape (see configNames). It is JSONC: comments and trailing commas
+	// used when none exists yet. On read the app also accepts a "config.json" of
+	// the same shape (see configNames). It is JSONC: comments and trailing commas
 	// are allowed (see stripJSONC), so it can be self-documented.
 	configFileName = "config.jsonc"
 
@@ -53,11 +53,34 @@ const (
 //   "allow_public": true,    // permit binding 0.0.0.0 or any public address.
 //                            // OFF by default: a public bind is refused because
 //                            // the server has no authentication.
-//   "data_dir": ".",         // holds modelsdb.db (source of truth) + curated.json
-//   "cache_dir": ".",        // holds logs/, the PID file, update-check.json
+//   "allowed_origins": [      // extra addresses (scheme + host, port optional)
+//     "http://100.64.0.10:8122",   // this app is also reachable at and may
+//     "https://models.example.com"  // write from, IN ADDITION to the address
+//   ],                        // the browser reached it on. Needed behind an
+//                             // HTTPS reverse proxy, or any name that differs
+//                             // from "host" above. Omit the port to mean the
+//                             // scheme's default (80 for http, 443 for https).
+//                             // NOT authentication: anyone who can reach a
+//                             // listed address can already read and write
+//                             // everything with curl. A malformed entry is
+//                             // dropped and logged; see GET /api/health.
+//   "data_dir": ".",         // holds modelsdb.db, the source of truth
+//   "cache_dir": ".",        // holds logs/, the PID file, update-check.json,
+//                            // backup-schedule.json, model-update.json
 //   "portable": true,        // shortcut: put data + cache both in this folder
 //   "upstream": { "owner": "DavidTimar1", "repo": "ModelsDB", "branch": "main" },
 //                            // a fork's catalog + update-check source
+//   "backup_enabled": true,  // take one backup a day into "backup_dir"
+//   "backup_dir": "",        // the folder the daily backup writes into. This file
+//                            // says where things on this machine live, and where
+//                            // a copy of the database may be written is one of
+//                            // those things: a restored database must never be
+//                            // able to repoint it.
+//   "backup_overwrite": true,// replace one file each time instead of writing a
+//                            // new dated one
+//
+// THE APP REWRITES THIS FILE when the Info dialog's backup controls are saved,
+// which drops any comment you added and any field it does not model.
 //
 `
 
@@ -81,31 +104,43 @@ var Host = DefaultHost
 
 // AllowPublic permits binding a wildcard (0.0.0.0 / ::) or public address.
 // Resolved once at startup (first hit wins): --allow-public flag,
-// MODELSDB_ALLOW_PUBLIC env, config.json "allow_public", else false. It is off
+// MODELSDB_ALLOW_PUBLIC env, config.jsonc "allow_public", else false. It is off
 // by default so a public bind is refused: the server has no authentication.
 var AllowPublic bool
 
+// AllowedOrigins is the extra addresses this install is legitimately reached
+// at, normalized (lower-cased scheme and host, explicit port). Resolved once
+// at startup (first hit wins): MODELSDB_ALLOWED_ORIGINS env (comma-separated,
+// REPLACES the file's list), else config.jsonc "allowed_origins", else empty.
+// Never accepted over HTTP - see resolveAllowedOrigins in paths.go.
+var AllowedOrigins []string
+
+// AllowedOriginsDropped counts how many allowed_origins entries this startup
+// rejected as malformed (see normalizeOrigin). GET /api/health reports it, so
+// a bad edit to config.jsonc is visible without reading the log.
+var AllowedOriginsDropped int
+
 // Resolved absolute locations, set by ResolvePaths at startup.
 var (
-	ConfigDir string // holds config.json + settings.json
-	DataDir   string // holds modelsdb.db, curated.json, .backups/
-	CacheDir  string // holds logs/, modelsdb.pid, update-check.json
+	ConfigDir string // holds config.jsonc
+	DataDir   string // holds modelsdb.db and .backups/
+	CacheDir  string // holds logs/, modelsdb.pid, update-check.json, backup-schedule.json, model-update.json
 	LogsDir   string // = CacheDir/logs
 	DirName   string // the app/working directory, for logging only
 
-	DbFile           string // SQLite source of truth - ALL model data, objective + personal (DataDir)
-	CuratedJsonFile  string // runtime export of the OBJECTIVE catalog subset (DataDir); the PUBLISHED catalog is embedded (internal/seedcatalog)
-	SettingsJsonFile string // UI view/colour preferences (ConfigDir)
-	ConfigFile       string // the config.json pointer (ConfigDir)
-	BackupsDir       string // pre-migration DB snapshots (DataDir/.backups)
-	PidFile          string // single-instance PID file (CacheDir)
-	UpdateCacheFile  string // cached update-check result (CacheDir)
+	DbFile                  string // SQLite source of truth - ALL model data, objective + personal, and the reader's view (DataDir)
+	ConfigFile              string // the config.jsonc pointer (ConfigDir)
+	BackupsDir              string // pre-migration DB snapshots (DataDir/.backups)
+	PidFile                 string // single-instance PID file (CacheDir)
+	UpdateCacheFile         string // cached update-check result (CacheDir)
+	BackupScheduleCacheFile string // server-owned daily-backup scheduler state (CacheDir)
+	ModelUpdateCacheFile    string // server-owned record of the last model update, which the daily update reads (CacheDir)
 
 	ExePath string
 )
 
-// ActiveUpstream is the GitHub repo this build pulls its curated catalog and
-// update notifications from. It defaults to the canonical repo and is overridable
+// ActiveUpstream is the GitHub repo this build checks for new releases, and
+// downloads them from. It defaults to the canonical repo and is overridable
 // per fork via config.json. Set by ResolvePaths/applyUpstream.
 var ActiveUpstream = defaultUpstream()
 

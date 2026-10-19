@@ -2,6 +2,22 @@ package catalog
 
 import "testing"
 
+// An id from the feed is escaped part by part, so it cannot change the path or
+// add a query to the address it ends up in.
+func TestModelEndpointsURLKeepsAnIdInsideItsSegments(t *testing.T) {
+	for id, want := range map[string]string{
+		"openai/gpt-5":      "https://openrouter.ai/api/v1/models/openai/gpt-5/endpoints",
+		"a/b:free":          "https://openrouter.ai/api/v1/models/a/b:free/endpoints",
+		"x/y?z=1#frag":      "https://openrouter.ai/api/v1/models/x/y%3Fz=1%23frag/endpoints",
+		"x/../../admin":     "https://openrouter.ai/api/v1/models/x/%2E%2E/%2E%2E/admin/endpoints",
+		"vendor/model name": "https://openrouter.ai/api/v1/models/vendor/model%20name/endpoints",
+	} {
+		if got := modelEndpointsURL(id); got != want {
+			t.Errorf("modelEndpointsURL(%q) = %q, want %q", id, got, want)
+		}
+	}
+}
+
 func TestIsZDR(t *testing.T) {
 	policies := map[string]bool{
 		"openai":        true,  // retains prompts -> not ZDR on its own

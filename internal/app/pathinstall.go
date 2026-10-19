@@ -1,4 +1,4 @@
-// Package app - "add to PATH" menu action. Makes the modelsdb command runnable
+// "add to PATH" menu action. Makes the modelsdb command runnable
 // from any terminal by either symlinking the binary into a directory already on
 // PATH (Unix) or adding the binary's own folder to PATH (a shell rc file on Unix,
 // the user environment in the registry on Windows). The two Unix methods are
@@ -9,6 +9,7 @@
 //
 // The platform-specific I/O lives in pathinstall_unix.go / pathinstall_windows.go;
 // the pure text helpers below are shared and unit-tested on every platform.
+
 package app
 
 import (
@@ -216,12 +217,12 @@ func runPathInstall() {
 }
 
 func applyLink(exe string) {
-	if err := removeShellPath(filepath.Dir(exe)); err != nil {
-		fmt.Printf("Warning: could not remove the PATH entry: %v\n", err)
-	}
 	if err := installLink(exe); err != nil {
 		fmt.Printf("Failed to create the symlink: %v\n", err)
 		return
+	}
+	if err := removeShellPath(filepath.Dir(exe)); err != nil {
+		fmt.Printf("Warning: could not remove the PATH entry: %v\n", err)
 	}
 	fmt.Printf("Symlinked %s -> %s\n", tildeify(symlinkPath()), exe)
 	fmt.Printf("Open a NEW terminal and run: modelsdb\n")

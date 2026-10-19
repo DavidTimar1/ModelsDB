@@ -1,4 +1,5 @@
-// Package shared - build/version metadata and semantic-version helpers.
+// Build/version metadata and semantic-version helpers.
+
 package shared
 
 import (
@@ -18,22 +19,10 @@ import (
 // The bare "dev" fallback below is what a plain `go run ./cmd/modelsdb` with no
 // ldflags reports.
 //
-// Code that gates on the version - the curated.json min_app_version check, the
-// update notifier, the self-updater - treats any dev build as the newest possible,
-// so development runs are never blocked from importing data nor nagged to update.
-// See IsDevVersion.
+// Code that gates on the version - the update notifier and the self-updater -
+// treats any dev build as the newest possible, so development runs are never
+// nagged to update. See IsDevVersion.
 var Version = "dev"
-
-// Curated catalog schema metadata, written into curated.json on export.
-const (
-	// CuratedSchemaVersion is the on-disk shape version of curated.json.
-	CuratedSchemaVersion = 1
-
-	// CuratedMinAppVersion is the minimum app version able to import the curated
-	// catalog this build produces. A binary older than the value found in a
-	// fetched curated.json refuses the import and tells the user to update.
-	CuratedMinAppVersion = "0.1.0"
-)
 
 // IsDevVersion reports whether this is a development build, in which case version
 // gates and the update check are skipped. True for the bare "dev" fallback and for

@@ -1,0 +1,10 @@
+{
+ "data": [
+  {
+   "id": "5b78bfbc-3284-4db2-8010-e6e793618393",
+   "provider_name": "Liquid",
+   "provider_slug": "liquid/bf16",
+   "variant": "free"
+  }
+ ]
+}

@@ -1,0 +1,130 @@
+{
+ "data": [
+  {
+   "id": "109db0e9-3511-468c-9a73-a8128eed7137",
+   "provider_name": "Wafer",
+   "provider_slug": "wafer/us",
+   "variant": "standard",
+   "stats": {
+    "endpoint_id": "109db0e9-3511-468c-9a73-a8128eed7137",
+    "latency_metric": "latency",
+    "p50_latency": 525.5,
+    "p75_latency": 859.25,
+    "p90_latency": 1727,
+    "p95_latency": 2647.45,
+    "p99_latency": 4756.330000000005,
+    "p50_throughput": 137,
+    "p75_throughput": 175,
+    "p90_throughput": 207,
+    "p95_throughput": 226,
+    "p99_throughput": 259,
+    "latency_request_count": 19998,
+    "throughput_request_count": 16308,
+    "request_count": 19998,
+    "window_minutes": 30
+   }
+  },
+  {
+   "id": "f63eff9a-3ae9-4bad-9303-ba1709491054",
+   "provider_name": "Wafer",
+   "provider_slug": "wafer",
+   "variant": "standard",
+   "stats": {
+    "endpoint_id": "f63eff9a-3ae9-4bad-9303-ba1709491054",
+    "latency_metric": "latency",
+    "p50_latency": 500,
+    "p75_latency": 742,
+    "p90_latency": 1393.2000000000005,
+    "p95_latency": 1989.2999999999997,
+    "p99_latency": 4117.8600000000015,
+    "p50_throughput": 133,
+    "p75_throughput": 164,
+    "p90_throughput": 197,
+    "p95_throughput": 219,
+    "p99_throughput": 251.5999999999999,
+    "latency_request_count": 1979,
+    "throughput_request_count": 1571,
+    "request_count": 1979,
+    "window_minutes": 30
+   }
+  },
+  {
+   "id": "c2317f99-2076-48bf-87aa-2c27ab98f70e",
+   "provider_name": "CoreWeave",
+   "provider_slug": "coreweave/fp4",
+   "variant": "standard",
+   "stats": {
+    "endpoint_id": "c2317f99-2076-48bf-87aa-2c27ab98f70e",
+    "latency_metric": "latency",
+    "p50_latency": 437,
+    "p75_latency": 605,
+    "p90_latency": 963.8000000000011,
+    "p95_latency": 1347.4499999999998,
+    "p99_latency": 2598.6200000000026,
+    "p50_throughput": 204,
+    "p75_throughput": 252,
+    "p90_throughput": 305.90000000000055,
+    "p95_throughput": 335,
+    "p99_throughput": 400,
+    "latency_request_count": 11051,
+    "throughput_request_count": 9448,
+    "request_count": 11051,
+    "window_minutes": 30
+   }
+  },
+  {
+   "id": "47a0f2e1-dedb-4d26-9148-a7bb40a5b40c",
+   "provider_name": "AtlasCloud",
+   "provider_slug": "atlas-cloud/fp8",
+   "variant": "standard",
+   "stats": {
+    "endpoint_id": "47a0f2e1-dedb-4d26-9148-a7bb40a5b40c",
+    "latency_metric": "latency",
+    "p50_latency": 1610,
+    "p75_latency": 2605.25,
+    "p90_latency": 3590.100000000006,
+    "p95_latency": 4643.299999999998,
+    "p99_latency": 5534.339999999997,
+    "p50_throughput": 60.5,
+    "p75_throughput": 106,
+    "p90_throughput": 125.10000000000001,
+    "p95_throughput": 130.1,
+    "p99_throughput": 138,
+    "latency_request_count": 80,
+    "throughput_request_count": 60,
+    "request_count": 80,
+    "window_minutes": 30
+   }
+  },
+  {
+   "id": "5210e748-21d8-4569-a11f-92fa86f9499a",
+   "provider_name": "Mistral",
+   "provider_slug": "mistral/zdr",
+   "variant": "standard",
+   "stats": {
+    "endpoint_id": "5210e748-21d8-4569-a11f-92fa86f9499a",
+    "latency_metric": "latency",
+    "p50_latency": 758,
+    "p75_latency": 1143.75,
+    "p90_latency": 1809,
+    "p95_latency": 2104.3499999999995,
+    "p99_latency": 2798.5199999999895,
+    "p50_throughput": 101,
+    "p75_throughput": 123,
+    "p90_throughput": 161,
+    "p95_throughput": 209,
+    "p99_throughput": 357,
+    "latency_request_count": 5794,
+    "throughput_request_count": 5159,
+    "request_count": 5794,
+    "window_minutes": 30
+   }
+  },
+  {
+   "id": "f1f2235c-fe8d-485e-b3b2-64b9c0665af1",
+   "provider_name": "Mistral",
+   "provider_slug": "mistral/eu",
+   "variant": "standard"
+  }
+ ]
+}

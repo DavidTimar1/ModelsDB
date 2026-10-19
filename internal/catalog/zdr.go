@@ -1,8 +1,8 @@
-// Package catalog - derive each OpenRouter model's Zero Data Retention (ZDR) flag.
+// Derive each OpenRouter model's Zero Data Retention (ZDR) flag.
 //
 // ZDR mirrors OpenRouter's website "Zero Data Retention" filter: a model is ZDR
 // if ANY of its serving providers has dataPolicy.retainsPrompts == false.
-// Non-OpenRouter models (huggingface | collection | manual) are always ZDR.
+// A model no OpenRouter listing covers is not written here.
 //
 // ZDR is NOT in the public API. It is derived from OpenRouter's unofficial
 // frontend data:
@@ -13,6 +13,7 @@
 // through a bounded worker pool. The whole derivation fails soft: any network or
 // parse failure logs a warning and leaves existing zdr values unchanged, so a
 // failed ZDR pass never aborts the catalog refresh or crashes startup.
+
 package catalog
 
 import (
@@ -20,27 +21,47 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"modelsdb/internal/dbcore"
+	"modelsdb/internal/shared"
+	"modelsdb/internal/store"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	allProvidersURL = "https://openrouter.ai/api/frontend/v1/all-providers"
-	zdrWorkers      = 8
-	zdrHTTPTimeout  = 20 * time.Second
+	zdrWorkers     = 8
+	zdrHTTPTimeout = 20 * time.Second
+	// zdrMaxBodyBytes bounds one provider-policy or endpoint answer.
+	zdrMaxBodyBytes = 32 << 20
 )
+
+// AllProvidersURL is the bulk frontend endpoint fetchProviderPolicies reads. It
+// is a package-level var, not a const, so a test can point it at a local
+// httptest.Server alongside ApiUrl and run FetchModels with no real request to
+// openrouter.ai for the provider-policy map either. The PER-MODEL endpoint
+// address is built in modelEndpointsURL from each model's id, which is escaped
+// segment by segment, dot segments included, so an id from the feed can never change the path. It is not
+// injectable, so a test exercising FetchModels with a model that carries an id
+// still reaches the real network there (harmlessly: a failure there only skips
+// that model's ZDR value, per DeriveZDR's fail-soft design).
+var AllProvidersURL = "https://openrouter.ai/api/frontend/v1/all-providers"
+
+// ModelEndpointsBase is the address the per-model endpoint lists are read under.
+// It is a package-level var so the browser exercise of a testhooks build can
+// point it at a local server and measure the pacing with no request to
+// openrouter.ai.
+var ModelEndpointsBase = "https://openrouter.ai/api/v1/models"
 
 // zdrClient is a dedicated client with a per-request timeout so a single slow
 // endpoint cannot stall the whole refresh.
-var zdrClient = &http.Client{Timeout: zdrHTTPTimeout}
+var zdrClient = shared.NewHTTPClient(zdrHTTPTimeout)
 
 // fetchProviderPolicies returns a map of provider slug -> retainsPrompts from the
 // bulk frontend all-providers endpoint (one call).
-func fetchProviderPolicies() (map[string]bool, error) {
-	body, err := zdrGet(allProvidersURL)
+func fetchProviderPolicies(pc *pacer) (map[string]bool, error) {
+	body, err := zdrGet(AllProvidersURL, pc)
 	if err != nil {
 		return nil, err
 	}
@@ -70,8 +91,8 @@ func fetchProviderPolicies() (map[string]bool, error) {
 // modelEndpointTags fetches a model's provider list from the public endpoints API
 // and returns each endpoint's provider slug (the part of the tag before any '/',
 // e.g. "google-vertex/global" -> "google-vertex").
-func modelEndpointTags(id string) ([]string, error) {
-	body, err := zdrGet("https://openrouter.ai/api/v1/models/" + id + "/endpoints")
+func modelEndpointTags(id string, pc *pacer) ([]string, error) {
+	body, err := zdrGet(modelEndpointsURL(id), pc)
 	if err != nil {
 		return nil, err
 	}
@@ -95,14 +116,24 @@ func modelEndpointTags(id string) ([]string, error) {
 	return slugs, nil
 }
 
-// zdrGet performs a browser-style GET and returns the body for a 200 response.
-func zdrGet(url string) ([]byte, error) {
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
+// modelEndpointsURL is the endpoints address of one OpenRouter model id. Each
+// "/"-separated part of the id is escaped on its own, so a stray "?", "#" or ".."
+// in the feed's id stays inside its segment.
+func modelEndpointsURL(id string) string {
+	parts := strings.Split(id, "/")
+	for i, part := range parts {
+		parts[i] = url.PathEscape(part)
+		if part == "." || part == ".." {
+			parts[i] = strings.ReplaceAll(part, ".", "%2E")
+		}
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-	resp, err := zdrClient.Do(req)
+	return ModelEndpointsBase + "/" + strings.Join(parts, "/") + "/endpoints"
+}
+
+// zdrGet performs a GET (paced and retried, see getWithRetry) and returns the
+// body for a 200 response, refusing one longer than zdrMaxBodyBytes.
+func zdrGet(url string, pc *pacer) ([]byte, error) {
+	resp, err := getWithRetry(zdrClient, url, pc)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +141,14 @@ func zdrGet(url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status %s", resp.Status)
 	}
-	return io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, zdrMaxBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > zdrMaxBodyBytes {
+		return nil, fmt.Errorf("body is larger than the %d byte limit", zdrMaxBodyBytes)
+	}
+	return body, nil
 }
 
 // isZDR applies the any-provider rule: ZDR is true if any serving provider keeps
@@ -131,45 +169,47 @@ type zdrResult struct {
 	zdr  bool
 }
 
-// deriveZDR derives and stores the zdr flag for every OpenRouter model. It fetches
-// the provider policy map once, then resolves each model's providers through a
-// bounded worker pool. It is fail-soft: on a global failure (policy map fetch)
-// it logs and returns nil, leaving all existing zdr values untouched; per-model
-// fetch failures are skipped (that model keeps its existing value).
+// DeriveZDR derives and stores what OpenRouter's providers say about every
+// OpenRouter model. It fetches the provider policy map once, then resolves each
+// model's providers through a bounded worker pool. It is fail-soft: on a global
+// failure (policy map fetch) it logs and leaves every stored answer untouched;
+// per-model fetch failures are skipped (that model keeps its existing value).
+// The error it returns says the pass did not do its job, either because a
+// global step failed or because at least half of the per-model requests did;
+// the refresh still carries on, and reports the pass to the caller as failed.
 //
-// Non-OpenRouter models are forced to zdr=1 in a single statement.
-func deriveZDR() error {
-	// Non-OpenRouter models are always ZDR by rule (no provider to retain prompts).
-	if _, err := dbcore.DB.Exec("UPDATE models SET zdr=1 WHERE source != 'openrouter'"); err != nil {
-		log.Printf("Warning: ZDR set for non-openrouter models failed: %v", err)
-	}
-
-	policies, err := fetchProviderPolicies()
+// A MODEL NO OPENROUTER LISTING COVERS IS NOT WRITTEN HERE AT ALL. There is no
+// company serving it, so nobody keeps a copy of what is sent to it, and that is
+// worked out when the model is read rather than stored on every row - which is
+// what keeps the rule in one place instead of two.
+//
+// Only the ids in listedIDs are asked about: a row the feed no longer lists has
+// no endpoints to read, and asking would only count a 404 as a failure.
+func DeriveZDR(listedIDs map[string]bool, pc *pacer) error {
+	policies, err := fetchProviderPolicies(pc)
 	if err != nil {
 		log.Printf("Warning: ZDR skipped (provider policy fetch failed): %v", err)
-		return nil
+		return fmt.Errorf("provider policy fetch failed: %w", err)
 	}
 
 	type job struct{ name, id string }
-	rows, err := dbcore.DB.Query("SELECT name, id FROM models WHERE source='openrouter' AND id != ''")
+	listed, err := store.ModelsOfSourceWithAnID("openrouter")
 	if err != nil {
 		log.Printf("Warning: ZDR skipped (model query failed): %v", err)
-		return nil
+		return fmt.Errorf("model query failed: %w", err)
 	}
-	var jobs []job
-	for rows.Next() {
-		var j job
-		if rows.Scan(&j.name, &j.id) == nil {
-			jobs = append(jobs, j)
+	jobs := make([]job, 0, len(listed))
+	for _, m := range listed {
+		if listedIDs[m.ID] {
+			jobs = append(jobs, job{m.Name, m.ID})
 		}
 	}
-	rows.Close()
 	if len(jobs) == 0 {
 		return nil
 	}
 
 	log.Printf("=== Deriving ZDR for %d OpenRouter models (%d providers, %d workers) ===",
-		len(jobs), len(policies), zdrWorkers)
+		len(jobs), len(policies), pc.workers())
 
 	jobCh := make(chan job)
 	resultCh := make(chan zdrResult)
@@ -177,12 +217,12 @@ func deriveZDR() error {
 	var wg sync.WaitGroup
 	var failMu sync.Mutex
 	failures := 0
-	for w := 0; w < zdrWorkers; w++ {
+	for w := 0; w < pc.workers(); w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for j := range jobCh {
-				slugs, err := modelEndpointTags(j.id)
+				slugs, err := modelEndpointTags(j.id, pc)
 				if err != nil {
 					failMu.Lock()
 					failures++
@@ -211,17 +251,13 @@ func deriveZDR() error {
 
 	updated := 0
 	for res := range resultCh {
-		flag := 0
-		if res.zdr {
-			flag = 1
-		}
-		if _, err := dbcore.DB.Exec("UPDATE models SET zdr=? WHERE name=?", flag, res.name); err != nil {
-			log.Printf("Warning: ZDR store for %q failed: %v", res.name, err)
-			continue
-		}
+		store.RecordZDR(res.name, res.zdr)
 		updated++
 	}
 
 	log.Printf("  ok ZDR derived for %d models (%d endpoint fetches failed -> kept prior value)", updated, failures)
+	if mostFetchesFailed(failures, len(jobs)) {
+		return fmt.Errorf("%d of %d endpoint fetches failed", failures, len(jobs))
+	}
 	return nil
 }

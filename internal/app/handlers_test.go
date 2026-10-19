@@ -2,50 +2,144 @@ package app
 
 import (
 	"encoding/json"
-	"modelsdb/internal/paths"
 	"modelsdb/internal/shared"
 	"modelsdb/internal/store"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 )
 
-func TestHandleSettingsSavedIndented(t *testing.T) {
-	paths.SettingsJsonFile = filepath.Join(t.TempDir(), "settings.json")
+// TestHandleSettingsRoundTrip pins the contract: what a write stores is what the
+// next GET answers, with each value's type intact; a key the write does not name
+// is left alone; and naming it in "delete" is what removes it.
+func TestHandleSettingsRoundTrip(t *testing.T) {
+	migratedDB(t)
 	// The UI POSTs minified, one-line JSON (JSON.stringify).
-	body := `{"f_search":"x","color_ranges":{"per second":{"low":0.05,"high":0.15}},"order":[[1,"asc"]]}`
+	body := `{"set":{"f_search":"x","col_hidden":["rating"],"order":[[1,"asc"]],"page_length":50,"auto_update":true},"delete":[]}`
 	rec := httptest.NewRecorder()
 	handleSettings(rec, httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(body)))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("POST status = %d", rec.Code)
+		t.Fatalf("POST status = %d, body=%s", rec.Code, rec.Body.String())
 	}
 
-	saved, err := os.ReadFile(paths.SettingsJsonFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// It must be written indented (2-space), not the one-line input.
-	if !strings.Contains(string(saved), "\n  \"") {
-		t.Errorf("settings.json should be indented, got:\n%s", saved)
-	}
-	// ...and still be valid JSON carrying the same data.
-	var m map[string]interface{}
-	if err := json.Unmarshal(saved, &m); err != nil {
-		t.Fatalf("saved settings not valid JSON: %v", err)
-	}
-	if m["f_search"] != "x" {
-		t.Errorf("data lost in re-indent: %v", m["f_search"])
-	}
-
-	// GET reads it back.
 	g := httptest.NewRecorder()
 	handleSettings(g, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
-	if g.Code != http.StatusOK || !strings.Contains(g.Body.String(), "f_search") {
-		t.Errorf("GET settings failed: %d %s", g.Code, g.Body.String())
+	if g.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, body=%s", g.Code, g.Body.String())
+	}
+	var got map[string]interface{}
+	if err := json.Unmarshal(g.Body.Bytes(), &got); err != nil {
+		t.Fatalf("GET body not valid JSON: %v (%s)", err, g.Body.String())
+	}
+	if got["f_search"] != "x" {
+		t.Errorf("f_search = %v, want x", got["f_search"])
+	}
+	if got["page_length"] != float64(50) {
+		t.Errorf("page_length = %#v, want the number 50", got["page_length"])
+	}
+	if got["auto_update"] != true {
+		t.Errorf("auto_update = %#v, want true", got["auto_update"])
+	}
+	if hidden, ok := got["col_hidden"].([]interface{}); !ok || len(hidden) != 1 || hidden[0] != "rating" {
+		t.Errorf("col_hidden = %#v, want [mine.rating]", got["col_hidden"])
+	}
+
+	// A second write naming only page_length leaves f_search exactly as it was.
+	// This is what stops a page that loaded before a preference existed from
+	// destroying it by not carrying it.
+	rec2 := httptest.NewRecorder()
+	handleSettings(rec2, httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(`{"set":{"page_length":25}}`)))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("second POST status = %d, body=%s", rec2.Code, rec2.Body.String())
+	}
+	g2 := httptest.NewRecorder()
+	handleSettings(g2, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+	var after map[string]interface{}
+	if err := json.Unmarshal(g2.Body.Bytes(), &after); err != nil {
+		t.Fatal(err)
+	}
+	if after["f_search"] != "x" {
+		t.Errorf("f_search = %#v after a write that did not name it, want x", after["f_search"])
+	}
+	if after["page_length"] != float64(25) {
+		t.Errorf("page_length = %#v, want the number 25", after["page_length"])
+	}
+
+	// Naming it in "delete" is what removes it.
+	rec3 := httptest.NewRecorder()
+	handleSettings(rec3, httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(`{"delete":["f_search"]}`)))
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("delete POST status = %d, body=%s", rec3.Code, rec3.Body.String())
+	}
+	g3 := httptest.NewRecorder()
+	handleSettings(g3, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+	var afterDelete map[string]interface{}
+	if err := json.Unmarshal(g3.Body.Bytes(), &afterDelete); err != nil {
+		t.Fatal(err)
+	}
+	if _, still := afterDelete["f_search"]; still {
+		t.Errorf("f_search should be gone after a delete naming it: %#v", afterDelete)
+	}
+	if afterDelete["page_length"] != float64(25) {
+		t.Errorf("page_length = %#v after a delete of another key, want the number 25", afterDelete["page_length"])
+	}
+}
+
+// TestHandleSettingsRefusesTheFlatBody pins the refusal of the whole-set shape
+// versions before 8.2.0 posted. It has to be a refusal rather than a no-op:
+// a body accepted quietly would store nothing and look like it had worked.
+func TestHandleSettingsRefusesTheFlatBody(t *testing.T) {
+	migratedDB(t)
+	rec := httptest.NewRecorder()
+	handleSettings(rec, httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(`{"page_length":50}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	g := httptest.NewRecorder()
+	handleSettings(g, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+	if strings.Contains(g.Body.String(), "page_length") {
+		t.Errorf("a refused POST must store nothing, got: %s", g.Body.String())
+	}
+}
+
+// TestHandleSettingsRefusesAKeyInBothHalves pins that a key named in "set" and
+// in "delete" is a 400 and writes nothing. Which half wins is not something to
+// guess at: guessing is how a preference goes missing.
+func TestHandleSettingsRefusesAKeyInBothHalves(t *testing.T) {
+	migratedDB(t)
+	rec := httptest.NewRecorder()
+	body := `{"set":{"page_length":50,"f_search":"x"},"delete":["page_length"]}`
+	handleSettings(rec, httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	g := httptest.NewRecorder()
+	handleSettings(g, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+	if strings.Contains(g.Body.String(), "f_search") {
+		t.Errorf("a refused POST must store nothing, got: %s", g.Body.String())
+	}
+}
+
+// TestHandleSettingsRefusesAServerKey pins the reserved namespace: the page must
+// not be able to create, change or clear a key the server keeps for itself, from
+// either half of a write, and the refusal stores nothing at all.
+func TestHandleSettingsRefusesAServerKey(t *testing.T) {
+	migratedDB(t)
+	for _, body := range []string{
+		`{"set":{"f_search":"x","server.notice.settings_reset":false}}`,
+		`{"set":{"f_search":"x"},"delete":["server.notice.settings_reset"]}`,
+	} {
+		rec := httptest.NewRecorder()
+		handleSettings(rec, httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(body)))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("POST %s status = %d, want 400 (body=%s)", body, rec.Code, rec.Body.String())
+		}
+		g := httptest.NewRecorder()
+		handleSettings(g, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+		if strings.Contains(g.Body.String(), "f_search") {
+			t.Errorf("a refused POST must store nothing, got: %s", g.Body.String())
+		}
 	}
 }
 
@@ -103,7 +197,7 @@ func TestHandleGetModels(t *testing.T) {
 
 	// With a query -> JSON array including our model.
 	rec := httptest.NewRecorder()
-	handleGetModels(rec, httptest.NewRequest(http.MethodGet, "/api/models?all=1", nil))
+	handleGetModels(rec, httptest.NewRequest(http.MethodGet, "/api/models?include_hidden=0", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("models status = %d, body=%s", rec.Code, rec.Body.String())
 	}
@@ -115,11 +209,11 @@ func TestHandleGetModels(t *testing.T) {
 	for _, m := range arr {
 		if shared.GetStr(m, "name") == "Test HF" {
 			found = true
-			cv, ok := m["custom_values"].(map[string]interface{})
+			cells, ok := m["cells"].(map[string]interface{})
 			if !ok {
-				t.Errorf("custom_values should be a JSON object, got %T", m["custom_values"])
-			} else if len(cv) != 0 {
-				t.Errorf("a model with no custom values should get an empty custom_values object, got %v", cv)
+				t.Errorf("cells should be a JSON object, got %T", m["cells"])
+			} else if cells["repository"] != "x/y" {
+				t.Errorf("the row's cells = %v, want the repository it was imported from", cells)
 			}
 		}
 	}
@@ -128,87 +222,21 @@ func TestHandleGetModels(t *testing.T) {
 	}
 }
 
-// TestHandleCustomColumnsCRUD exercises the HTTP surface end to end: GET lists
-// (the migration's Speed/Rating/OCR columns are already there on any migrated
-// DB), POST creates a new one, and DELETE removes it and cascades away its
-// values - mirroring what the "Custom columns" management UI drives.
-func TestHandleCustomColumnsCRUD(t *testing.T) {
-	migratedDB(t)
-
-	baseline := httptest.NewRecorder()
-	handleCustomColumns(baseline, httptest.NewRequest(http.MethodGet, "/api/custom-columns", nil))
-	if baseline.Code != http.StatusOK {
-		t.Fatalf("GET status = %d", baseline.Code)
-	}
-	var before []store.CustomColumn
-	if err := json.Unmarshal(baseline.Body.Bytes(), &before); err != nil {
-		t.Fatalf("GET body not JSON: %v", err)
-	}
-
-	createBody := `{"name":"Vendor","type":"dropdown_text","options":["acme","globex"]}`
-	create := httptest.NewRecorder()
-	handleCustomColumns(create, httptest.NewRequest(http.MethodPost, "/api/custom-columns", strings.NewReader(createBody)))
-	if create.Code != http.StatusOK {
-		t.Fatalf("POST status = %d, body=%s", create.Code, create.Body.String())
-	}
-	var created store.CustomColumn
-	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
-		t.Fatalf("POST body not JSON: %v (%s)", err, create.Body.String())
-	}
-	if created.Name != "Vendor" || created.Type != store.ColumnTypeDropdownText || len(created.Options) != 2 {
-		t.Errorf("created column = %+v", created)
-	}
-
-	after := httptest.NewRecorder()
-	handleCustomColumns(after, httptest.NewRequest(http.MethodGet, "/api/custom-columns", nil))
-	var list []store.CustomColumn
-	if err := json.Unmarshal(after.Body.Bytes(), &list); err != nil {
-		t.Fatal(err)
-	}
-	if len(list) != len(before)+1 {
-		t.Fatalf("column count after create = %d, want %d", len(list), len(before)+1)
-	}
-
-	del := httptest.NewRecorder()
-	handleCustomColumns(del, httptest.NewRequest(http.MethodDelete, "/api/custom-columns?id="+strconv.FormatInt(created.ID, 10), nil))
-	if del.Code != http.StatusOK {
-		t.Fatalf("DELETE status = %d, body=%s", del.Code, del.Body.String())
-	}
-
-	final := httptest.NewRecorder()
-	handleCustomColumns(final, httptest.NewRequest(http.MethodGet, "/api/custom-columns", nil))
-	var listFinal []store.CustomColumn
-	if err := json.Unmarshal(final.Body.Bytes(), &listFinal); err != nil {
-		t.Fatal(err)
-	}
-	if len(listFinal) != len(before) {
-		t.Fatalf("column count after delete = %d, want back to %d", len(listFinal), len(before))
-	}
-
-	// A missing/invalid id is rejected, not silently accepted.
-	bad := httptest.NewRecorder()
-	handleCustomColumns(bad, httptest.NewRequest(http.MethodDelete, "/api/custom-columns", nil))
-	if bad.Code != http.StatusBadRequest {
-		t.Errorf("DELETE with no id status = %d, want 400", bad.Code)
-	}
-}
-
-// TestHandleSaveModelsCustomValues pins the /api/save extension: a batch item's
-// optional custom_values object is applied via store.SetCustomValue alongside
-// the fixed curated fields, in the same request - the whole point of folding
-// custom-column saves into the existing autosave/retry pipeline instead of
-// adding a second one.
+// TestHandleSaveModelsCustomValues pins that a column of the reader's own is
+// written by the same request, under the same "cells" object, as every other
+// value: there is one kind of column and one write path, so a heading somebody
+// invented needs no second pipeline.
 func TestHandleSaveModelsCustomValues(t *testing.T) {
 	migratedDB(t)
-	if err := store.ImportFullRecord(map[string]interface{}{"name": "M", "source": "manual"}, "manual", "chat"); err != nil {
+	if err := store.AddModelWithCells("M", map[string]string{}); err != nil {
 		t.Fatal(err)
 	}
-	colID, err := store.CreateCustomColumn("Tier", store.ColumnTypeDropdownText, []string{"gold", "silver"})
+	colID, err := ownColumnKey(t, "Tier", store.ValueTypeChoice, []string{"gold", "silver"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	body := `[{"name":"M","notes":"hi","custom_values":{"` + strconv.FormatInt(colID, 10) + `":"gold"}}]`
+	body := `[{"name":"M","cells":{"notes":"hi",` + asJSON(colID) + `:"gold"}}]`
 	rec := httptest.NewRecorder()
 	handleSaveModels(rec, httptest.NewRequest(http.MethodPost, "/api/save", strings.NewReader(body)))
 	if rec.Code != http.StatusOK {
@@ -218,7 +246,7 @@ func TestHandleSaveModelsCustomValues(t *testing.T) {
 	if got := colStr(t, "M", "notes"); got != "hi" {
 		t.Errorf("curated notes = %q, want hi", got)
 	}
-	v, ok, err := store.GetCustomValue("M", colID)
+	v, ok, err := ownValueOf("M", colID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,15 +254,14 @@ func TestHandleSaveModelsCustomValues(t *testing.T) {
 		t.Errorf("custom value = %q, ok=%v, want \"gold\"", v, ok)
 	}
 
-	// Clearing (empty string) removes the stored value, same as a direct
-	// SetCustomValue call.
-	clearBody := `[{"name":"M","custom_values":{"` + strconv.FormatInt(colID, 10) + `":""}}]`
+	// Clearing (empty string) removes the stored value, as it does in any column.
+	clearBody := `[{"name":"M","cells":{` + asJSON(colID) + `:""}}]`
 	rec2 := httptest.NewRecorder()
 	handleSaveModels(rec2, httptest.NewRequest(http.MethodPost, "/api/save", strings.NewReader(clearBody)))
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", rec2.Code, rec2.Body.String())
 	}
-	if _, ok, err := store.GetCustomValue("M", colID); err != nil || ok {
+	if _, ok, err := ownValueOf("M", colID); err != nil || ok {
 		t.Errorf("value should be cleared, ok=%v err=%v", ok, err)
 	}
 }

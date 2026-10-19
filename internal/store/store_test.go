@@ -57,29 +57,59 @@ func TestPriceStr(t *testing.T) {
 	}
 }
 
+// TestDeriveType covers the modality mapping and, for audio, the one case
+// modality cannot decide: music against speech. The two descriptions below are
+// the real ones OpenRouter serves for Google's Lyria 3 Pro (music) and OpenAI's
+// GPT Audio (speech), and the two models carry IDENTICAL output modalities - so
+// the pair is the whole reason the description is read at all.
 func TestDeriveType(t *testing.T) {
+	const lyriaDesc = "Full-length songs are priced at $0.08 per song. Lyria 3 is Google's " +
+		"family of music generation models, available through the Gemini API."
+	const gptAudioDesc = "The gpt-audio model is OpenAI's first generally available audio model. " +
+		"The new snapshot features an upgraded decoder for more natural sounding voices."
+
 	cases := []struct {
+		what string
 		out  []string
+		desc string
 		want string
 	}{
-		{[]string{"image"}, "image"},
-		{[]string{"video"}, "video"},
-		{[]string{"audio"}, "tts"},
-		{[]string{"text"}, "chat"},
-		{nil, "chat"},
+		{"image output", []string{"image"}, "", "image"},
+		{"video output", []string{"video"}, "", "video"},
+		{"audio output, nothing said", []string{"audio"}, "", "tts"},
+		{"text output", []string{"text"}, "", "chat"},
+		{"no output at all", nil, "", "chat"},
+
+		// OpenRouter's own spellings for the media that are not text, image,
+		// video or audio.
+		{"embeddings output", []string{"embeddings"}, "", "embedding"},
+		{"rerank output", []string{"rerank"}, "", "rerank"},
+		{"speech output", []string{"speech"}, "", "tts"},
+		{"transcription output", []string{"transcription"}, "", "stt"},
+		// A HuggingFace import's spellings of two of them.
+		{"embedding output", []string{"embedding"}, "", "embedding"},
+		{"ranking output", []string{"ranking"}, "", "rerank"},
+		{"spelling is case blind", []string{"Embeddings"}, "", "embedding"},
+		// Speech is not audio, so a description about music cannot re-label it.
+		{"speech that talks about music", []string{"speech"}, lyriaDesc, "tts"},
+		{"an embedding model that talks about music", []string{"embeddings"}, lyriaDesc, "embedding"},
+
+		{"a music model", []string{"text", "audio"}, lyriaDesc, "music"},
+		{"a speech model", []string{"text", "audio"}, gptAudioDesc, "tts"},
+
+		// The music answer is reachable only through the audio branch, so a
+		// description about music on a model that outputs something else cannot
+		// re-label it.
+		{"an image model that talks about music", []string{"image"}, lyriaDesc, "image"},
+		{"a chat model that talks about music", []string{"text"}, lyriaDesc, "chat"},
+
+		// A speech model that merely MENTIONS the word music stays speech.
+		{"speech mentioning music in passing", []string{"audio"},
+			"A text-to-speech voice model. It is not intended for music.", "tts"},
 	}
 	for _, c := range cases {
-		if got := deriveType(c.out); got != c.want {
-			t.Errorf("deriveType(%v) = %q, want %q", c.out, got, c.want)
+		if got := deriveType(c.out, c.desc); got != c.want {
+			t.Errorf("%s: deriveType(%v, %.40q...) = %q, want %q", c.what, c.out, c.desc, got, c.want)
 		}
-	}
-}
-
-func TestJSONArrStr(t *testing.T) {
-	if jsonArrStr(nil) != "" {
-		t.Errorf("empty list should be ''")
-	}
-	if got := jsonArrStr([]string{"a", "b"}); got != `["a","b"]` {
-		t.Errorf("jsonArrStr = %q", got)
 	}
 }

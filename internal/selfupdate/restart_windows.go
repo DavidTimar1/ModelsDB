@@ -3,6 +3,7 @@
 package selfupdate
 
 import (
+	"modelsdb/internal/shared"
 	"os"
 	"os/exec"
 )
@@ -21,6 +22,9 @@ func Restart() error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	// The new process rebinds the port and writes its own record; leaving this
+	// process's record behind would make its first act a stale-file cleanup.
+	shared.ClearOwnRecord()
 	os.Exit(0)
 	return nil
 }

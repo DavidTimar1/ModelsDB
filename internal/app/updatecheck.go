@@ -1,4 +1,4 @@
-// Package app - notify-only update checking.
+// Notify-only update checking.
 //
 // On startup and then once a day, the server asks the upstream repo's GitHub
 // Releases API for the latest release tag and compares it to this build. If a
@@ -6,8 +6,9 @@
 // download or replace the binary - updating is the user's deliberate action.
 //
 // The last result is cached to the cache dir so a quick restart does not re-hit
-// GitHub. Like all GitHub calls here, requests send only Go's default
+// GitHub. Like all GitHub calls here, requests carry the one plain browser
 // User-Agent (no app/owner identity). Dev builds skip the check entirely.
+
 package app
 
 import (
@@ -141,7 +142,7 @@ func saveUpdateCache(info updateInfo) {
 		return
 	}
 	os.MkdirAll(paths.CacheDir, 0755)
-	if err := os.WriteFile(paths.UpdateCacheFile, b, 0644); err != nil {
+	if err := paths.WriteFileAtomic(paths.UpdateCacheFile, b, 0644); err != nil {
 		log.Printf("Warning: could not write update cache: %v", err)
 	}
 }

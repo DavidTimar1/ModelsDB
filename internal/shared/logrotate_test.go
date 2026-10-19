@@ -33,3 +33,47 @@ func TestRotatingWriterCapsSizeAndBackups(t *testing.T) {
 		t.Fatal(".3 should not exist (maxFiles=2)")
 	}
 }
+
+// A rotation whose fresh file cannot be opened does not leave the writer holding
+// a closed file: the failure is reported and a later write recovers.
+func TestRotatingWriterRecoversWhenTheFreshFileCannotBeOpened(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "logs")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "x.log")
+	w, err := NewRotatingWriter(p, 30, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	if _, err := w.Write([]byte("0123456789012345678\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("0123456789012345678\n")); err == nil {
+		t.Fatal("a write with no folder to write into reported success")
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("after\n")); err != nil {
+		t.Fatalf("the writer did not recover once the folder was back: %v", err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != "after\n" {
+		t.Errorf("log holds %q, want the line written after recovery", b)
+	}
+}
+
+func TestRotatingWriterRefusesAWriteAfterClose(t *testing.T) {
+	w, err := NewRotatingWriter(filepath.Join(t.TempDir(), "x.log"), 100, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	if _, err := w.Write([]byte("late")); err == nil {
+		t.Error("a write after Close was accepted")
+	}
+}

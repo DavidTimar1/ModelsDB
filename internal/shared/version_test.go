@@ -22,3 +22,29 @@ func TestCompareSemver(t *testing.T) {
 		}
 	}
 }
+
+// TestIsDevVersion pins which builds skip the update nag and the self-updater:
+// the bare fallback, an unset version, and anything the dev wrappers stamp with
+// a -dev suffix. A release version never does.
+func TestIsDevVersion(t *testing.T) {
+	orig := Version
+	defer func() { Version = orig }()
+
+	cases := []struct {
+		version string
+		want    bool
+	}{
+		{"dev", true},
+		{"", true},
+		{"1.26.1-dev", true},
+		{"1.26.1", false},
+		{"v1.26.1", false},
+		{"1.26.1-rc1", false},
+	}
+	for _, c := range cases {
+		Version = c.version
+		if got := IsDevVersion(); got != c.want {
+			t.Errorf("IsDevVersion() with Version = %q is %v, want %v", c.version, got, c.want)
+		}
+	}
+}

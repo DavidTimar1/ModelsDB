@@ -1,0 +1,846 @@
+[
+ {
+  "text": "",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true,
+  "note": "empty box matches everything"
+ },
+ {
+  "text": "   ",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "gpt",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "GPT",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true,
+  "note": "capitals ignored"
+ },
+ {
+  "text": "openai 4o",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true,
+  "note": "every word, any order"
+ },
+ {
+  "text": "4o openai",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "openai 5o",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": false
+ },
+ {
+  "text": "openai: gpt",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "(2024-08-06)",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true,
+  "note": "parentheses are literal"
+ },
+ {
+  "text": "a/b",
+  "members": [
+   "x a/b y"
+  ],
+  "want": true,
+  "note": "slash literal"
+ },
+ {
+  "text": "\"openai 4o\"",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": false,
+  "note": "a phrase must be contiguous"
+ },
+ {
+  "text": "\"openai: gpt-4o\"",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "\"OPENAI: GPT\"",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "\"gpt-4o\" openai",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "\"gpt-4o",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true,
+  "note": "an unclosed quote runs to the end"
+ },
+ {
+  "text": "\"gpt-4o (2024-08-06)",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "\"gpt-4o (2024-08-07)",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": false
+ },
+ {
+  "text": "\"\"",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true,
+  "note": "empty quotes are ignored"
+ },
+ {
+  "text": "\"\" gpt",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "\"\" zzz",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": false
+ },
+ {
+  "text": "\"",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true,
+  "note": "a lone quote is ignored"
+ },
+ {
+  "text": "\" \"",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true,
+  "note": "a quoted space is a literal space term"
+ },
+ {
+  "text": "\"a  b\"",
+  "members": [
+   "a  b"
+  ],
+  "want": true,
+  "note": "inside quotes spaces are literal"
+ },
+ {
+  "text": "\"a  b\"",
+  "members": [
+   "a b"
+  ],
+  "want": false
+ },
+ {
+  "text": "gpt !mini",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "gpt !mini",
+  "members": [
+   "OpenAI: GPT-4o mini"
+  ],
+  "want": false
+ },
+ {
+  "text": "!mini",
+  "members": [
+   "OpenAI: GPT-4o mini"
+  ],
+  "want": false
+ },
+ {
+  "text": "!mini",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "!",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true,
+  "note": "a lone ! is ignored"
+ },
+ {
+  "text": "! gpt",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "! zzz",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": false
+ },
+ {
+  "text": "gpt!",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": false,
+  "note": "! inside a word is literal"
+ },
+ {
+  "text": "a!b",
+  "members": [
+   "xa!by"
+  ],
+  "want": true
+ },
+ {
+  "text": "a!b",
+  "members": [
+   "ab"
+  ],
+  "want": false
+ },
+ {
+  "text": "!\"gpt-4o\"",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": false
+ },
+ {
+  "text": "!\"gpt-4p\"",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "\"!x\"",
+  "members": [
+   "has !x here"
+  ],
+  "want": true,
+  "note": "a quoted ! is literal"
+ },
+ {
+  "text": "\"!x\"",
+  "members": [
+   "has x here"
+  ],
+  "want": false
+ },
+ {
+  "text": "!!x",
+  "members": [
+   "a !x b"
+  ],
+  "want": false,
+  "note": "the second ! is literal inside the negated word"
+ },
+ {
+  "text": "!!x",
+  "members": [
+   "a b"
+  ],
+  "want": true
+ },
+ {
+  "text": "!AND",
+  "members": [
+   "a b"
+  ],
+  "want": true,
+  "note": "a negated AND is the word AND"
+ },
+ {
+  "text": "!AND",
+  "members": [
+   "a AND b"
+  ],
+  "want": false
+ },
+ {
+  "text": "!mini",
+  "members": [],
+  "want": true,
+  "note": "a negated term matches an empty list"
+ },
+ {
+  "text": "!mini",
+  "members": [
+   ""
+  ],
+  "want": true,
+  "note": "a negated term matches an empty text cell"
+ },
+ {
+  "text": "mini",
+  "members": [],
+  "want": false
+ },
+ {
+  "text": "mini",
+  "members": [
+   ""
+  ],
+  "want": false
+ },
+ {
+  "text": "!a !b",
+  "members": [],
+  "want": true,
+  "note": "no positive term matches an empty cell"
+ },
+ {
+  "text": "!a b",
+  "members": [],
+  "want": false,
+  "note": "a positive term never matches an empty cell"
+ },
+ {
+  "text": "openai AND gpt",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "openai AND zzz",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": false
+ },
+ {
+  "text": "openai OR zzz",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "zzz OR openai",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "zzz OR yyy",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": false
+ },
+ {
+  "text": "a b OR c",
+  "members": [
+   "a b"
+  ],
+  "want": true,
+  "note": "AND binds tighter than OR"
+ },
+ {
+  "text": "a b OR c",
+  "members": [
+   "c"
+  ],
+  "want": true
+ },
+ {
+  "text": "a b OR c",
+  "members": [
+   "a"
+  ],
+  "want": false
+ },
+ {
+  "text": "a OR b c",
+  "members": [
+   "b"
+  ],
+  "want": false
+ },
+ {
+  "text": "a OR b c",
+  "members": [
+   "b c"
+  ],
+  "want": true
+ },
+ {
+  "text": "a OR b c",
+  "members": [
+   "a"
+  ],
+  "want": true
+ },
+ {
+  "text": "and",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": false,
+  "note": "lowercase and is a word"
+ },
+ {
+  "text": "and or",
+  "members": [
+   "rock and roll or not"
+  ],
+  "want": true
+ },
+ {
+  "text": "and or",
+  "members": [
+   "rock and roll"
+  ],
+  "want": false
+ },
+ {
+  "text": "openai or gpt",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": false,
+  "note": "lowercase or is a word"
+ },
+ {
+  "text": "\"AND\"",
+  "members": [
+   "a AND b"
+  ],
+  "want": true,
+  "note": "a quoted AND is a word"
+ },
+ {
+  "text": "\"OR\"",
+  "members": [
+   "a b"
+  ],
+  "want": false
+ },
+ {
+  "text": "ANDY",
+  "members": [
+   "Andy here"
+  ],
+  "want": true,
+  "note": "AND inside a word is not an operator"
+ },
+ {
+  "text": "OR",
+  "members": [
+   "x"
+  ],
+  "want": true,
+  "note": "a lone OR is ignored"
+ },
+ {
+  "text": "AND",
+  "members": [
+   "x"
+  ],
+  "want": true
+ },
+ {
+  "text": "AND OR AND",
+  "members": [
+   "x"
+  ],
+  "want": true
+ },
+ {
+  "text": "OR gpt",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true,
+  "note": "a leading OR is ignored"
+ },
+ {
+  "text": "OR zzz",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": false
+ },
+ {
+  "text": "gpt OR",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true,
+  "note": "a trailing OR is ignored"
+ },
+ {
+  "text": "zzz OR",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": false
+ },
+ {
+  "text": "gpt OR OR zzz",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true,
+  "note": "a repeated OR is ignored"
+ },
+ {
+  "text": "zzz OR OR yyy",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": false
+ },
+ {
+  "text": "AND gpt",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "gpt AND AND 4o",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "gpt AND",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "gpt AND !mini",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "gpt OR !mini",
+  "members": [
+   "OpenAI: GPT-4o mini"
+  ],
+  "want": true
+ },
+ {
+  "text": "zzz OR !mini",
+  "members": [
+   "OpenAI: GPT-4o mini"
+  ],
+  "want": false
+ },
+ {
+  "text": "!mini OR !gpt",
+  "members": [
+   "OpenAI: GPT-4o (2024-08-06)"
+  ],
+  "want": true
+ },
+ {
+  "text": "claude OR gemini",
+  "members": [
+   "Google: Gemini 2.5"
+  ],
+  "want": true
+ },
+ {
+  "text": "claude OR gemini",
+  "members": [
+   "Anthropic: Claude 4"
+  ],
+  "want": true
+ },
+ {
+  "text": "claude OR gemini",
+  "members": [
+   "OpenAI: GPT"
+  ],
+  "want": false
+ },
+ {
+  "text": "\"a b\" OR \"c d\"",
+  "members": [
+   "x c d y"
+  ],
+  "want": true
+ },
+ {
+  "text": "\"a b\" OR \"c d\"",
+  "members": [
+   "x c y d"
+  ],
+  "want": false
+ },
+ {
+  "text": "text",
+  "members": [
+   "text",
+   "image",
+   "audio"
+  ],
+  "want": true
+ },
+ {
+  "text": "text image",
+  "members": [
+   "text",
+   "image",
+   "audio"
+  ],
+  "want": true,
+  "note": "different terms may be met by different members"
+ },
+ {
+  "text": "text video",
+  "members": [
+   "text",
+   "image",
+   "audio"
+  ],
+  "want": false
+ },
+ {
+  "text": "\"text image\"",
+  "members": [
+   "text",
+   "image",
+   "audio"
+  ],
+  "want": false,
+  "note": "a phrase must sit inside one member"
+ },
+ {
+  "text": "\"mage\"",
+  "members": [
+   "text",
+   "image",
+   "audio"
+  ],
+  "want": true
+ },
+ {
+  "text": "!video",
+  "members": [
+   "text",
+   "image",
+   "audio"
+  ],
+  "want": true
+ },
+ {
+  "text": "!image",
+  "members": [
+   "text",
+   "image",
+   "audio"
+  ],
+  "want": false,
+  "note": "a negated term is false when any member holds it"
+ },
+ {
+  "text": "text !image",
+  "members": [
+   "text",
+   "image",
+   "audio"
+  ],
+  "want": false
+ },
+ {
+  "text": "text !video",
+  "members": [
+   "text",
+   "image",
+   "audio"
+  ],
+  "want": true
+ },
+ {
+  "text": "video OR audio",
+  "members": [
+   "text",
+   "image",
+   "audio"
+  ],
+  "want": true
+ },
+ {
+  "text": "!video",
+  "members": [],
+  "want": true
+ },
+ {
+  "text": "text",
+  "members": [],
+  "want": false
+ },
+ {
+  "text": "!video !audio",
+  "members": [],
+  "want": true
+ },
+ {
+  "text": "!video !audio",
+  "members": [
+   "text",
+   "image",
+   "audio"
+  ],
+  "want": false
+ },
+ {
+  "text": "x OR !video",
+  "members": [],
+  "want": true
+ },
+ {
+  "text": "repo/",
+  "members": [
+   "github.com/repo/y"
+  ],
+  "want": true
+ },
+ {
+  "text": "/",
+  "members": [
+   "github.com/x/y"
+  ],
+  "want": true
+ },
+ {
+  "text": "/",
+  "members": [
+   "nothing"
+  ],
+  "want": false
+ },
+ {
+  "text": "-4B",
+  "members": [
+   "pplx-embed-v1 -4B"
+  ],
+  "want": true,
+  "note": "a leading hyphen is literal"
+ },
+ {
+  "text": "a,b",
+  "members": [
+   "a,b"
+  ],
+  "want": true,
+  "note": "commas are literal"
+ },
+ {
+  "text": "not:x",
+  "members": [
+   "not:x"
+  ],
+  "want": true,
+  "note": "prefix words are plain text"
+ },
+ {
+  "text": "a\tb",
+  "members": [
+   "b a"
+  ],
+  "want": true,
+  "note": "a tab separates words"
+ },
+ {
+  "text": "é",
+  "members": [
+   "CAFÉ"
+  ],
+  "want": true,
+  "note": "non-ASCII case folding"
+ },
+ {
+  "text": " x",
+  "members": [
+   "x"
+  ],
+  "want": false,
+  "note": "a non-breaking space is not a separator"
+ },
+ {
+  "text": "ab\"c",
+  "members": [
+   "xab\"cx"
+  ],
+  "want": true,
+  "note": "a quote inside a word is literal"
+ },
+ {
+  "text": "\"a\"b",
+  "members": [
+   "ab"
+  ],
+  "want": true,
+  "note": "a closing quote ends the phrase, the next text is a new term"
+ },
+ {
+  "text": "\"a\"b",
+  "members": [
+   "a"
+  ],
+  "want": false
+ }
+]

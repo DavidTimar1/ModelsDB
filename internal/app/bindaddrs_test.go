@@ -20,7 +20,7 @@ func TestBindAddrs(t *testing.T) {
 		{"empty host", "", 8122, []string{"127.0.0.1:8122"}},
 		{"localhost alias", "localhost", 8122, []string{"127.0.0.1:8122"}},
 		{"ipv6 loopback", "::1", 8122, []string{"127.0.0.1:8122"}},
-		{"tailscale ip adds loopback", "100.85.27.66", 8122, []string{"127.0.0.1:8122", "100.85.27.66:8122"}},
+		{"tailscale ip adds loopback", "100.64.0.10", 8122, []string{"127.0.0.1:8122", "100.64.0.10:8122"}},
 		{"lan ip adds loopback", "192.168.1.5", 9000, []string{"127.0.0.1:9000", "192.168.1.5:9000"}},
 		{"wildcard binds alone", "0.0.0.0", 8122, []string{"0.0.0.0:8122"}},
 		{"ipv6 wildcard binds alone", "::", 8122, []string{"[::]:8122"}},

@@ -1,9 +1,11 @@
-// Package app handles handlers logic and functionalities.
+// The handlers for health, paths, settings, reading the catalog and saving cells.
+
 package app
 
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -13,10 +15,46 @@ import (
 	"modelsdb/internal/store"
 	"net/http"
 	"os"
-	"path/filepath"
-	"strconv"
 	"time"
 )
+
+// instanceInfo is what this process says about itself: which application it is,
+// which process, which port, which data dir, and every address it answers on.
+// GET /api/health returns it with status "ok", and a request that arrives before
+// startup finishes returns the same block with status "starting" (see
+// writeStarting in server.go).
+//
+// The "app" and "pid" fields are what make the reply usable as PROOF of who
+// holds the port: `stop` asks the port itself who is serving there and acts on
+// the answer, which is right even when the PID file is stale, missing, or was
+// never written. The marker is required before anything acts on that pid.
+//
+// "addresses" holds the base URLs whose listeners really bound (see
+// servedaddrs.go). It belongs here because this block is already this instance's
+// identity, and because the page has no other way to learn it: a browser knows
+// only the address its reader typed, so the research brief it writes for an AI
+// assistant takes the full list from here.
+//
+// "allowed_origins" and "allowed_origins_dropped" report config.jsonc
+// "allowed_origins" as this process actually resolved it at startup - the
+// normalized form actually compared against a request's Origin, and how many
+// entries were dropped as malformed - so a hand edit that did not take effect
+// is visible here without reading the log.
+func instanceInfo(status string) map[string]interface{} {
+	exe, _ := os.Executable()
+	return map[string]interface{}{
+		"app":                     shared.HealthAppMarker,
+		"status":                  status,
+		"pid":                     os.Getpid(),
+		"exe":                     exe,
+		"port":                    paths.Port,
+		"data":                    paths.DataDir,
+		"version":                 shared.Version,
+		"addresses":               servedAddresses(),
+		"allowed_origins":         paths.AllowedOrigins,
+		"allowed_origins_dropped": paths.AllowedOriginsDropped,
+	}
+}
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -24,12 +62,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":  "ok",
-		"port":    paths.Port,
-		"data":    paths.DataDir,
-		"version": shared.Version,
-	})
+	json.NewEncoder(w).Encode(instanceInfo("ok"))
 }
 
 // handlePaths (GET /api/paths) reports the resolved on-disk locations so the UI
@@ -51,14 +84,12 @@ func handlePaths(w http.ResponseWriter, r *http.Request) {
 			"cache":  paths.CacheDir,
 		},
 		"files": map[string]string{
-			"database":      paths.DbFile,
-			"curated.json":  paths.CuratedJsonFile,
-			"config.jsonc":  paths.ConfigFile,
-			"settings.json": paths.SettingsJsonFile,
-			"backups":       paths.BackupsDir,
-			"logs":          paths.LogsDir,
-			"pid":           paths.PidFile,
-			"update-check":  paths.UpdateCacheFile,
+			"database":     paths.DbFile,
+			"config.jsonc": paths.ConfigFile,
+			"backups":      paths.BackupsDir,
+			"logs":         paths.LogsDir,
+			"pid":          paths.PidFile,
+			"update-check": paths.UpdateCacheFile,
 		},
 	})
 }
@@ -156,12 +187,12 @@ func handleAppUpdateRestart(w http.ResponseWriter, r *http.Request) {
 // /api/update/status.
 func handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		log.Printf("ERROR [%s %s] unsupported method", r.Method, r.URL.Path)
+		log.Printf("ERROR [%s %q] unsupported method", r.Method, r.URL.Path)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	if !refresh.start() {
+	if !refresh.start(false) {
 		log.Printf("ok /api/update rejected: refresh already running")
 		w.WriteHeader(http.StatusConflict)
 		json.NewEncoder(w).Encode(map[string]interface{}{"started": false, "running": true})
@@ -176,7 +207,7 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 // status so the frontend can poll progress and detect completion.
 func handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		log.Printf("ERROR [%s %s] unsupported method", r.Method, r.URL.Path)
+		log.Printf("ERROR [%s %q] unsupported method", r.Method, r.URL.Path)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -184,120 +215,255 @@ func handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(refresh.snapshot())
 }
 
+// backupSettingKeys are the three keys of a settings write that are NOT the
+// reader's view: they say whether a daily copy of the database is taken and
+// where it is written, which is a fact about this machine and belongs in
+// config.jsonc. The page sends and receives them beside every other key and
+// knows nothing of the split.
+var backupSettingKeys = []string{"backup_enabled", "backup_dir", "backup_overwrite"}
+
+// isBackupSettingKey reports whether key is one config.jsonc holds.
+func isBackupSettingKey(key string) bool {
+	for _, backupKey := range backupSettingKeys {
+		if key == backupKey {
+			return true
+		}
+	}
+	return false
+}
+
+// maxSettingsBody is the largest POST /api/settings body this route reads.
+//
+// The route is unauthenticated and it writes to disk, and this server does not
+// always answer on loopback alone: configured with a LAN or Tailscale address it
+// binds that too. A view naming every column the app can draw is a few
+// kilobytes, so the ceiling is out of a reader's reach and takes away an
+// unbounded write.
+const maxSettingsBody = 4 << 20
+
+// settingsWrite is a POST /api/settings body that has passed every check: the
+// keys to store, the keys to remove, and the backup settings peeled off into the
+// shape config.jsonc takes.
+type settingsWrite struct {
+	set           map[string]json.RawMessage
+	del           []string
+	backup        backupScheduleConfig
+	backupChanged bool
+}
+
+// handleSettings (GET, POST /api/settings) is the reader's view and the app's
+// preferences: every stored key on the way out, and the keys to store or remove
+// on the way in.
+//
+// A WRITE NAMES WHAT IT REMOVES. The body is {"set": {...}, "delete": [...]},
+// and a key in neither half is left exactly as it was. A page that loaded before
+// a preference existed does not carry it and so cannot destroy it, which is what
+// a whole-set write could not promise.
+//
+// THE BODY IS ONE THING TO THE BROWSER AND TWO THINGS HERE. The reader's view
+// goes into the database, one row per key, so a restored backup brings back the
+// view that describes those models. The three backup keys go into config.jsonc,
+// so a restored backup can never repoint where the next copy is written.
+//
+// EVERY CHECK RUNS BEFORE THE FIRST BYTE IS WRITTEN, because those two stores
+// cannot be made atomic with each other: a body that is going to be refused has
+// to be refused while neither of them has been touched.
+//
+// A FAILED READ IS AN ERROR, never an empty object. The page suppresses every
+// save until a read succeeds, and it can only do that if a failure looks like
+// one: answering {} would have it draw defaults and then save them over a view
+// that was fine.
 func handleSettings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		b, err := os.ReadFile(paths.SettingsJsonFile)
+		stored, err := store.ListSettings()
 		if err != nil {
-			b = []byte(`{}`)
-		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.Write(b)
-	case http.MethodPost:
-		b, err := io.ReadAll(r.Body)
-		if err != nil {
-			log.Printf("ERROR [%s %s] failed to read body: %v", r.Method, r.URL.Path, err)
-			http.Error(w, fmt.Sprintf("Failed to read body: %v", err), http.StatusBadRequest)
+			log.Printf("ERROR [%s %q] failed to read the stored settings: %v", r.Method, r.URL.Path, err)
+			http.Error(w, fmt.Sprintf("Failed to read settings: %v", err), http.StatusInternalServerError)
 			return
 		}
-		// Store settings.json human-readable (indented, not one line). json.Indent
-		// preserves the data and key order; if the body is not valid JSON (it always
-		// is, from the UI) fall back to writing it verbatim.
-		var pretty bytes.Buffer
-		if json.Indent(&pretty, b, "", "  ") == nil {
-			b = append(pretty.Bytes(), '\n')
+		out := make(map[string]interface{}, len(stored)+len(backupSettingKeys))
+		for key, value := range stored {
+			out[key] = value
 		}
-		os.MkdirAll(filepath.Dir(paths.SettingsJsonFile), 0755)
-		if err := os.WriteFile(paths.SettingsJsonFile, b, 0644); err != nil {
-			log.Printf("ERROR [%s %s] failed to write settings.json: %v", r.Method, r.URL.Path, err)
+		cfg := readBackupScheduleConfig()
+		out["backup_enabled"] = cfg.Enabled
+		out["backup_dir"] = cfg.Dir
+		out["backup_overwrite"] = cfg.Overwrite
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(out)
+	case http.MethodPost:
+		r.Body = http.MaxBytesReader(w, r.Body, maxSettingsBody)
+		write, err := readSettingsWrite(r.Body)
+		if err != nil {
+			log.Printf("ERROR [%s %q] refused the write: %v", r.Method, r.URL.Path, err)
+			http.Error(w, fmt.Sprintf("The settings write was refused: %v", err), http.StatusBadRequest)
+			return
+		}
+		if write.backupChanged {
+			if err := paths.SaveBackupSettings(write.backup.Enabled, write.backup.Dir, write.backup.Overwrite); err != nil {
+				log.Printf("ERROR [%s %q] failed to write the backup settings: %v", r.Method, r.URL.Path, err)
+				http.Error(w, fmt.Sprintf("Failed to write settings: %v", err), http.StatusInternalServerError)
+				return
+			}
+		}
+		if err := store.WriteSettings(write.set, write.del); err != nil {
+			log.Printf("ERROR [%s %q] failed to store the settings: %v", r.Method, r.URL.Path, err)
 			http.Error(w, fmt.Sprintf("Failed to write settings: %v", err), http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Write([]byte(`{"ok": true}`))
 	default:
-		log.Printf("ERROR [%s %s] unsupported method", r.Method, r.URL.Path)
+		log.Printf("ERROR [%s %q] unsupported method", r.Method, r.URL.Path)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
-// handleCustomColumns (GET/POST/DELETE /api/custom-columns) is the CRUD surface
-// for user-defined personal columns: GET lists every column definition (with its
-// dropdown options, if any); POST creates one from {name, type, options}; DELETE
-// (?id=<id>) removes one, which cascades to wipe every model's stored value for
-// it (enforced by the DB's ON DELETE CASCADE, not by code here). Per-model
-// VALUES are not served here - they ride embedded in each row of
-// GET /api/models (custom_values), and are written back alongside the curated
-// fields in a normal /api/save batch (see handleSaveModels below), so the
-// existing autosave/retry/debounce machinery covers custom columns too without
-// a second save pipeline.
-func handleCustomColumns(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	switch r.Method {
-	case http.MethodGet:
-		cols, err := store.ListCustomColumns()
-		if err != nil {
-			log.Printf("ERROR [%s %s] list custom columns: %v", r.Method, r.URL.Path, err)
-			http.Error(w, fmt.Sprintf("Failed to list custom columns: %v", err), http.StatusInternalServerError)
-			return
-		}
-		json.NewEncoder(w).Encode(cols)
-
-	case http.MethodPost:
-		var body struct {
-			Name    string   `json:"name"`
-			Type    string   `json:"type"`
-			Options []string `json:"options"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			log.Printf("ERROR [%s %s] JSON decode failed: %v", r.Method, r.URL.Path, err)
-			http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
-			return
-		}
-		id, err := store.CreateCustomColumn(body.Name, body.Type, body.Options)
-		if err != nil {
-			log.Printf("ERROR [%s %s] create custom column: %v", r.Method, r.URL.Path, err)
-			http.Error(w, fmt.Sprintf("Failed to create custom column: %v", err), http.StatusBadRequest)
-			return
-		}
-		cols, err := store.ListCustomColumns()
-		if err != nil {
-			log.Printf("ERROR [%s %s] list after create: %v", r.Method, r.URL.Path, err)
-			http.Error(w, fmt.Sprintf("Column created but failed to list it back: %v", err), http.StatusInternalServerError)
-			return
-		}
-		log.Printf("ok /api/custom-columns created id=%d name=%q type=%q", id, body.Name, body.Type)
-		for _, c := range cols {
-			if c.ID == id {
-				json.NewEncoder(w).Encode(c)
-				return
-			}
-		}
-		json.NewEncoder(w).Encode(map[string]interface{}{"id": id})
-
-	case http.MethodDelete:
-		id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
-		if err != nil {
-			http.Error(w, "Invalid or missing id", http.StatusBadRequest)
-			return
-		}
-		if err := store.DeleteCustomColumn(id); err != nil {
-			log.Printf("ERROR [%s %s] delete custom column %d: %v", r.Method, r.URL.Path, id, err)
-			http.Error(w, fmt.Sprintf("Failed to delete custom column: %v", err), http.StatusInternalServerError)
-			return
-		}
-		log.Printf("ok /api/custom-columns deleted id=%d", id)
-		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
-
-	default:
-		log.Printf("ERROR [%s %s] unsupported method", r.Method, r.URL.Path)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+// readSettingsWrite reads a POST /api/settings body and answers what it asks
+// for, or the one reason it is refused. Every error it returns is the caller's,
+// and the route answers all of them with 400.
+//
+// IT WRITES NOTHING AND CHECKS EVERYTHING. A half-checked body that had already
+// updated config.jsonc before a reserved key was noticed would leave the machine
+// half-written behind a 400 on the wire.
+//
+// AN UNKNOWN TOP-LEVEL MEMBER IS REFUSED rather than ignored: accepting a flat
+// whole-set body quietly would store nothing and look like it had worked.
+func readSettingsWrite(body io.Reader) (settingsWrite, error) {
+	var envelope struct {
+		Set    json.RawMessage `json:"set"`
+		Delete json.RawMessage `json:"delete"`
 	}
+	decoder := json.NewDecoder(body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			return settingsWrite{}, fmt.Errorf("the body is larger than the %d bytes this route accepts", maxSettingsBody)
+		}
+		return settingsWrite{}, fmt.Errorf(`the body must be a JSON object of the shape {"set":{...},"delete":[...]} and hold nothing else: %v`, err)
+	}
+
+	out := settingsWrite{set: map[string]json.RawMessage{}}
+	if len(envelope.Set) > 0 {
+		if isJSONNull(envelope.Set) {
+			return settingsWrite{}, errors.New(`"set" must be a JSON object of keys and values; leave it out to store nothing`)
+		}
+		if err := json.Unmarshal(envelope.Set, &out.set); err != nil {
+			return settingsWrite{}, fmt.Errorf(`"set" must be a JSON object of keys and values: %v`, err)
+		}
+	}
+	if len(envelope.Delete) > 0 {
+		if isJSONNull(envelope.Delete) {
+			return settingsWrite{}, errors.New(`"delete" must be a JSON array of setting keys; leave it out to remove nothing`)
+		}
+		if err := json.Unmarshal(envelope.Delete, &out.del); err != nil {
+			return settingsWrite{}, fmt.Errorf(`"delete" must be a JSON array of setting keys: %v`, err)
+		}
+	}
+
+	for key := range out.set {
+		if err := checkPostedSettingKey(key); err != nil {
+			return settingsWrite{}, err
+		}
+	}
+	for _, key := range out.del {
+		if err := checkPostedSettingKey(key); err != nil {
+			return settingsWrite{}, err
+		}
+		if _, inBoth := out.set[key]; inBoth {
+			return settingsWrite{}, fmt.Errorf("the key %q is in both halves; name it in one of them, because which half wins is not something to guess at", key)
+		}
+		if isBackupSettingKey(key) {
+			return settingsWrite{}, fmt.Errorf("the key %q names where this machine writes its daily backup and cannot be deleted; set it instead", key)
+		}
+	}
+
+	cfg := readBackupScheduleConfig()
+	want, err := backupSettingsFrom(out.set, cfg)
+	if err != nil {
+		return settingsWrite{}, err
+	}
+	out.backup = want
+	out.backupChanged = want != cfg
+	for _, key := range backupSettingKeys {
+		delete(out.set, key)
+	}
+	return out, nil
+}
+
+// checkPostedSettingKey answers whether the browser may name key in either half
+// of a write.
+func checkPostedSettingKey(key string) error {
+	if key == "" {
+		return errors.New("a settings key cannot be empty")
+	}
+	if store.IsReservedSettingKey(key) {
+		return fmt.Errorf("the key %q belongs to the server and cannot be written here", key)
+	}
+	return nil
+}
+
+// isJSONNull reports whether raw is the JSON literal null. A member that is
+// present and null is a caller's bug rather than an absent member: a caller who
+// means "nothing to store" leaves the member out.
+func isJSONNull(raw json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+}
+
+// backupSettingsFrom answers what config.jsonc should hold once the backup keys
+// a write carries are applied to what it holds now.
+//
+// AN ABSENT KEY KEEPS ITS STORED VALUE. Every other key in a write is the
+// caller's to state; these three name a folder somebody typed, and a caller
+// saving one preference must not be able to turn their daily backup off by not
+// mentioning it.
+//
+// A value of the wrong type comes back as an error the caller is answerable for,
+// so the route says 400 rather than the 500 a failed write earns.
+func backupSettingsFrom(set map[string]json.RawMessage, cfg backupScheduleConfig) (backupScheduleConfig, error) {
+	want := cfg
+	if raw, ok := set["backup_enabled"]; ok {
+		if err := json.Unmarshal(raw, &want.Enabled); err != nil {
+			return cfg, fmt.Errorf("backup_enabled must be true or false: %v", err)
+		}
+	}
+	if raw, ok := set["backup_dir"]; ok {
+		if err := json.Unmarshal(raw, &want.Dir); err != nil {
+			return cfg, fmt.Errorf("backup_dir must be a folder path: %v", err)
+		}
+	}
+	if raw, ok := set["backup_overwrite"]; ok {
+		if err := json.Unmarshal(raw, &want.Overwrite); err != nil {
+			return cfg, fmt.Errorf("backup_overwrite must be true or false: %v", err)
+		}
+	}
+	return want, nil
+}
+
+// handleSettingsAckNotice (POST /api/settings/ack-notice) dismisses the one-time
+// notice that the reader's view did not come across from the settings file, by
+// deleting the row the migration wrote. It is a route of its own because the
+// page cannot write that key itself: the server's own keys are refused on
+// /api/settings, which is what stops a filter change from clearing them.
+func handleSettingsAckNotice(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := store.DeleteSetting(store.SettingsResetNotice); err != nil {
+		log.Printf("ERROR [%s %q] failed to dismiss the notice: %v", r.Method, r.URL.Path, err)
+		http.Error(w, fmt.Sprintf("Failed to dismiss the notice: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Write([]byte(`{"ok": true}`))
 }
 
 func handleGetModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		log.Printf("ERROR [%s %s] unsupported method", r.Method, r.URL.Path)
+		log.Printf("ERROR [%s %q] unsupported method", r.Method, r.URL.Path)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -310,77 +476,139 @@ func handleGetModels(w http.ResponseWriter, r *http.Request) {
 
 	merged, err := processModels()
 	if err != nil {
-		log.Printf("ERROR [%s %s] processModels failed: %v", r.Method, r.URL.Path, err)
+		log.Printf("ERROR [%s %q] processModels failed: %v", r.Method, r.URL.Path, err)
 		http.Error(w, fmt.Sprintf("Failed to process models: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	out := filterAndProject(merged, r.URL.Query())
-	log.Printf("  ok Served %d/%d models (query: %s)", len(out), len(merged), r.URL.RawQuery)
+	// The columns are read per request because a filter names one, and the set is
+	// not fixed: a column the reader invented is filterable the moment it exists.
+	columns, err := store.ListColumns()
+	if err != nil {
+		log.Printf("ERROR [%s %q] list columns: %v", r.Method, r.URL.Path, err)
+		http.Error(w, fmt.Sprintf("Failed to list the columns: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	out, err := filterAndProject(merged, r.URL.Query(), columns)
+	if err != nil {
+		// A parameter naming no column is refused rather than ignored: a filter
+		// this server dropped would answer with the whole catalog while looking
+		// like a narrow answer.
+		log.Printf("ok /api/models refused: %v", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	log.Printf("  ok Served %d/%d models", len(out), len(merged))
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(out)
 }
 
-// handleSaveModels (POST /api/save) applies a batch of partial curated updates.
-// Each item is keyed by model name and may carry any of the fixed curated
-// fields (applied via store.SaveCurated's read-modify-write merge) plus an
-// optional `custom_values` object - {"<column id>": "<value>"} - for the
-// user-defined personal columns. Unlike the fixed fields, a custom value needs
-// no merge step (each column is already an independent, sparse row), so it is
-// applied directly via store.SetCustomValue, one call per entry.
+// saveRequest is one item of a save: which model, and the cells to write on it.
+// Both keys are named exactly as GET /api/models answers them, so a row read out
+// of this API can be sent straight back with nothing looked up in between.
+type saveRequest struct {
+	Name  string            `json:"name"`
+	Cells map[string]string `json:"cells"`
+}
+
+// saveResult is what the caller learns about ONE item of the batch: whether it
+// was written and, where it was refused, the sentence saying what to correct.
+type saveResult struct {
+	Name    string `json:"name"`
+	Written bool   `json:"written"`
+	Error   string `json:"error,omitempty"`
+}
+
+// handleSaveModels (POST /api/save) writes cells onto models that ALREADY EXIST.
+// The body is a JSON array of {"name": "...", "cells": {"<column key>": "<text>"}}.
+//
+// A BATCH IS HONEST, ITEM BY ITEM. Each item is written on its own, in one
+// transaction, and the answer carries a result per item saying whether it was
+// written and, where it was not, why. Nothing is hidden: stopping at the first
+// bad item would tell the caller that nothing had happened when several models
+// had changed.
+//
+// WHY PER ITEM AND NOT ONE TRANSACTION OVER THE WHOLE BATCH. The items are
+// independent: each names a different model, and they arrive from an agent that
+// researched several models in one pass. Discarding good research about six
+// models because a seventh named a column that does not exist would lose work
+// nothing else holds, and the caller cannot correct what it cannot see. What must
+// be atomic is ONE model's write, and that it is: a refused key in an item leaves
+// every cell of that model exactly as it was.
+//
+// THE STATUS SAYS WHICH CASE IT IS. Every item written answers 200. Some written
+// and some refused answers 207, with the per-item results. NOTHING written
+// answers the refusal of the first item - 404 for a model that is not here, 400
+// for a key nothing typed may reach, a key naming no column, or a value the
+// column will not hold - so a one-item call reads exactly as it always did.
 func handleSaveModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		log.Printf("ERROR [%s %s] unsupported method", r.Method, r.URL.Path)
+		log.Printf("ERROR [%s %q] unsupported method", r.Method, r.URL.Path)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	var updates []map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
-		log.Printf("ERROR [%s %s] JSON decode failed: %v", r.Method, r.URL.Path, err)
-		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+	// A key the request shape does not carry is REFUSED rather than ignored: a
+	// model posted back under flat field names would otherwise be accepted and
+	// write nothing at all.
+	var updates []saveRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&updates); err != nil {
+		log.Printf("ERROR [%s %q] JSON decode failed: %v", r.Method, r.URL.Path, err)
+		http.Error(w, fmt.Sprintf("Invalid JSON: %v. The body is an array of {\"name\":\"...\",\"cells\":{\"notes\":\"...\"}}.", err), decodeFailureStatus(err))
 		return
 	}
 
 	log.Printf("ok /api/save called with %d updates", len(updates))
 
-	saved := 0
+	results := make([]saveResult, 0, len(updates))
+	written, firstFailure := 0, error(nil)
 	for _, u := range updates {
-		name := shared.GetStr(u, "name")
-		if name == "" {
+		err := store.SaveCells(u.Name, u.Cells)
+		if err != nil {
+			if firstFailure == nil {
+				firstFailure = err
+			}
+			log.Printf("ok /api/save refused %q: %v", u.Name, err)
+			results = append(results, saveResult{Name: u.Name, Error: err.Error()})
 			continue
 		}
-		if err := store.SaveCurated(name, u); err != nil {
-			log.Printf("ERROR saving %q: %v", name, err)
-			http.Error(w, fmt.Sprintf("Failed to save %q: %v", name, err), http.StatusInternalServerError)
-			return
-		}
-		if cv, ok := u["custom_values"].(map[string]interface{}); ok {
-			for k, v := range cv {
-				colID, err := strconv.ParseInt(k, 10, 64)
-				if err != nil {
-					continue
-				}
-				s, _ := v.(string)
-				if err := store.SetCustomValue(name, colID, s); err != nil {
-					log.Printf("ERROR saving custom value (model=%q column=%d): %v", name, colID, err)
-					http.Error(w, fmt.Sprintf("Failed to save custom value for %q: %v", name, err), http.StatusInternalServerError)
-					return
-				}
-			}
-		}
-		saved++
+		written++
+		results = append(results, saveResult{Name: u.Name, Written: true})
 	}
 
-	if saved > 0 {
-		if err := store.ExportData(); err != nil {
-			log.Printf("Warning: export data failed: %v", err)
-		}
-		log.Printf("  ok Saved %d updates to DB", saved)
+	// Nothing written at all: answer the first refusal on its own terms, so a
+	// caller sending one item gets the status that names what went wrong.
+	if written == 0 && firstFailure != nil {
+		http.Error(w, fmt.Sprintf("Nothing was written: %v.", firstFailure), statusOfWriteRefusal(firstFailure))
+		return
+	}
+	if written > 0 && written < len(results) {
+		log.Printf("  ok Saved %d of %d items; the rest are named in the answer", written, len(results))
 	} else {
-		log.Printf("  ok No updates to save")
+		log.Printf("  ok Saved %d updates to DB", written)
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "records": saved})
+	if written < len(results) {
+		w.WriteHeader(http.StatusMultiStatus)
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok": written == len(results), "records": written, "results": results,
+	})
+}
+
+// statusOfWriteRefusal turns a refusal from the write path into the HTTP status
+// that says which kind it is: a model that is not here, or a request to correct.
+func statusOfWriteRefusal(err error) int {
+	switch {
+	case errors.Is(err, store.ErrNoSuchModel):
+		return http.StatusNotFound
+	case errors.Is(err, store.ErrNotWritable), errors.Is(err, store.ErrCellValue),
+		errors.Is(err, store.ErrColumnKey), errors.Is(err, store.ErrNoSuchColumn):
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
 }
